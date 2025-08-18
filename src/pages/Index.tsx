@@ -494,7 +494,7 @@ const Index = () => {
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                   <StatsCard
                     title="Com SP"
-                    value={formatCurrency(rawShopeeCommission)}
+                    value={formatCurrency(getStatValue('totalComSP', 0))}
                     change={0}
                     icon={<ShoppingCart className="h-4 w-4 text-orange-500" />}
                     colorClass="from-orange-500/10 to-orange-600/5"
@@ -510,7 +510,7 @@ const Index = () => {
                   />
                   <StatsCard
                     title="Order SP"
-                    value={uniqueShopeeOrderCount.toLocaleString()}
+                    value={getStatValue('totalOrdersSP', 0).toLocaleString()}
                     change={0}
                     icon={<Target className="h-4 w-4 text-orange-500" />}
                     colorClass="from-orange-500/10 to-orange-600/5"
@@ -695,3 +695,4 @@ const Index = () => {
 };
 
 export default Index;
+
