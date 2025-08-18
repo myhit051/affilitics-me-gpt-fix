@@ -668,4 +668,36 @@ export function generateTraditionalCampaigns(
   });
 
   return campaigns.sort((a, b) => b.commission - a.commission);
+  // --- Compatibility shim for existing imports ---
+// ให้ type ตรงกับของเดิม
+export interface DailyMetrics {
+  date: string;
+  totalCom: number;
+  adSpend: number;
+  profit: number;
+  roi: number;
+}
+
+// คืน analyzeDailyPerformance ให้ไฟล์อื่นที่ยัง import อยู่ใช้ได้ต่อ
+export function analyzeDailyPerformance(
+  shopeeOrders: ShopeeOrder[],
+  lazadaOrders: LazadaOrder[],
+  facebookAds: FacebookAd[]
+): DailyMetrics[] {
+  // ใช้เวอร์ชันใหม่ที่ “ผลรวมรายวัน = Summary” เป๊ะ
+  const rows = analyzeDailyBreakdownStable(shopeeOrders, lazadaOrders, facebookAds, {
+    shopeeOrderIdKey: 'เลขที่คำสั่งซื้อ',
+    includeUnknownBucket: true,
+  });
+
+  // map ให้ได้โครง DailyMetrics เดิม
+  return rows.map(r => ({
+    date: r.date,
+    totalCom: r.totalCom,
+    adSpend: r.adSpend,
+    profit: r.profit,
+    roi: r.roi,
+  }));
+}
+
 }
