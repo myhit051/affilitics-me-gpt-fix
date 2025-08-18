@@ -1,14 +1,16 @@
 /* =========================
- * Interfaces (ตามสคีมาเดิม)
+ * Interfaces (ตามสคีมาเดิม + เพิ่มคอลัมน์ที่เจอในไฟล์จริง)
  * ========================= */
 interface ShopeeOrder {
   'เลขที่คำสั่งซื้อ': string;
-  'รหัสการสั่งซื้อ'?: string; // เพิ่ม optional เพื่อรองรับไฟล์ export บางเวอร์ชัน
+  'รหัสการสั่งซื้อ'?: string; // เสถียรสุดสำหรับ distinct
   'รหัสสินค้า': string;
   'ชื่อสินค้า': string;
   'ราคาสินค้า(฿)': string;
   'คอมมิชชั่นสินค้า(%)': string;
   'คอมมิชชั่นสินค้าโดยรวม(฿)': string;
+  'คอมมิชชั่นคำสั่งซื้อโดยรวม(฿)'?: string;   // เพิ่ม
+  'ค่าคอมมิชชั่นสุทธิ(฿)'?: string;             // เพิ่ม (ใช้เป็นหลัก)
   'วันที่สั่งซื้อ'?: string;
   'เวลาที่สั่งซื้อ'?: string;
   'สถานะ'?: string;
@@ -117,34 +119,37 @@ const isCanceledShopee = (order: ShopeeOrder | Record<string, any>): boolean => 
     .toString()
     .trim()
     .toLowerCase();
-  const canceledValues = new Set(['ยกเลิก', 'ถูกยกเลิก', 'cancel', 'canceled', 'cancelled']);
+  const canceledValues = new Set([
+    'ยกเลิก', 'ถูกยกเลิก',
+    'cancel', 'canceled', 'cancelled'
+  ]);
   return canceledValues.has(raw);
 };
 
-// เลือกคีย์ ID ของออเดอร์ Shopee ให้เสถียร (ค่าเริ่มต้นใช้ "เลขที่คำสั่งซื้อ")
+// ✅ ใช้ "รหัสการสั่งซื้อ" เป็นค่าเริ่มต้น (เหมือน Shopee Dashboard)
 const getShopeeOrderId = (
   order: ShopeeOrder,
-  preferredKey: 'เลขที่คำสั่งซื้อ' | 'รหัสการสั่งซื้อ' = 'เลขที่คำสั่งซื้อ'
+  preferredKey: 'เลขที่คำสั่งซื้อ' | 'รหัสการสั่งซื้อ' = 'รหัสการสั่งซื้อ'
 ): string => {
   if (preferredKey === 'รหัสการสั่งซื้อ' && order['รหัสการสั่งซื้อ']) return order['รหัสการสั่งซื้อ']!;
-  return order['เลขที่คำสั่งซื้อ'] ?? order['รหัสการสั่งซื้อ'] ?? '';
+  return order['รหัสการสั่งซื้อ'] ?? order['เลขที่คำสั่งซื้อ'] ?? '';
 };
 
-// แปลงวันที่สำหรับ Shopee (ใช้ "เวลาที่สั่งซื้อ" เป็นหลัก)
+// ใช้เวลาที่สั่งซื้อเป็นหลัก → YYYY-MM-DD
 const parseShopeeDateKey = (order: ShopeeOrder): string => {
   const candidates = [order['เวลาที่สั่งซื้อ'], order['วันที่สั่งซื้อ']];
   for (const d of candidates) {
     if (!d) continue;
     const dt = new Date(d);
     if (!isNaN(dt.getTime())) return dt.toISOString().split('T')[0];
-    // ลอง day-first
+    // เผื่อรูปแบบวัน/เดือน/ปี
     const df = new Date(d.replace(/(\d{2})-(\d{2})-(\d{4})/, '$2-$1-$3'));
     if (!isNaN(df.getTime())) return df.toISOString().split('T')[0];
   }
   return 'Unknown';
 };
 
-// แปลงวันที่สำหรับ Lazada
+// Lazada
 const parseLazadaDateKey = (order: LazadaOrder): string => {
   const candidates = [order['Order Time'], order['Conversion Time']];
   for (const d of candidates) {
@@ -157,7 +162,15 @@ const parseLazadaDateKey = (order: LazadaOrder): string => {
   return 'Unknown';
 };
 
-// จับคู่ค่าใช้จ่ายโฆษณาจาก Sub ID (เดิม)
+// ✅ ค่าคอมมิชชั่น Shopee แบบ “เหมือนหน้าแดชบอร์ด”
+const getShopeeCommission = (o: ShopeeOrder): number =>
+  parseNumber(
+    o['ค่าคอมมิชชั่นสุทธิ(฿)'] ??
+    o['คอมมิชชั่นคำสั่งซื้อโดยรวม(฿)'] ??
+    o['คอมมิชชั่นสินค้าโดยรวม(฿)']
+  );
+
+// จับคู่ค่าใช้จ่ายโฆษณาจาก Sub ID
 function matchSubIdWithAds(subId: string, facebookAds: FacebookAd[]): number {
   if (!subId) return 0;
   return facebookAds.reduce((total, ad) => {
@@ -173,7 +186,7 @@ function matchSubIdWithAds(subId: string, facebookAds: FacebookAd[]): number {
 }
 
 /* =========================
- * calculateMetrics (แก้ให้ Shopee ตัด "ยกเลิก")
+ * calculateMetrics — เวอร์ชัน Shopee-accurate
  * ========================= */
 export function calculateMetrics(
   shopeeOrders: ShopeeOrder[],
@@ -183,25 +196,34 @@ export function calculateMetrics(
   selectedValidity: string = 'all',
   selectedChannels: string[] = [],
   selectedPlatform: string = 'all',
-  // เพิ่มตัวเลือกให้สอดคล้องกันทั้งระบบ
-  options: { shopeeOrderIdKey?: 'เลขที่คำสั่งซื้อ' | 'รหัสการสั่งซื้อ' } = {}
+  options: {
+    shopeeOrderIdKey?: 'เลขที่คำสั่งซื้อ' | 'รหัสการสั่งซื้อ';
+    // (ถ้าต้องการกรองวัน) YYYY-MM-DD
+    dateFrom?: string; // รวมวันเริ่ม
+    dateTo?: string;   // รวมวันสิ้นสุด
+  } = {}
 ): CalculatedMetrics {
-  const shopeeOrderIdKey = options.shopeeOrderIdKey ?? 'เลขที่คำสั่งซื้อ';
+  const shopeeOrderIdKey = options.shopeeOrderIdKey ?? 'รหัสการสั่งซื้อ';
 
   // ----- Filter Shopee -----
+  const byDate = (o: ShopeeOrder) => {
+    if (!options.dateFrom && !options.dateTo) return true;
+    const k = parseShopeeDateKey(o);
+    if (options.dateFrom && k < options.dateFrom) return false;
+    if (options.dateTo && k > options.dateTo) return false;
+    return true;
+  };
+
   let filteredShopeeOrders =
     selectedPlatform === 'all' || selectedPlatform === 'Shopee' ? shopeeOrders : [];
-  // ตัดยกเลิก
-  filteredShopeeOrders = filteredShopeeOrders.filter(o => !isCanceledShopee(o));
+  filteredShopeeOrders = filteredShopeeOrders
+    .filter(byDate)
+    .filter(o => !isCanceledShopee(o)); // ตัดยกเลิก (เหมือน Shopee)
 
   if (selectedSubIds.length > 0 && !selectedSubIds.includes('all')) {
     filteredShopeeOrders = filteredShopeeOrders.filter(order => {
       const orderSubIds = [
-        order['Sub_id1'],
-        order['Sub_id2'],
-        order['Sub_id3'],
-        order['Sub_id4'],
-        order['Sub_id5']
+        order['Sub_id1'], order['Sub_id2'], order['Sub_id3'], order['Sub_id4'], order['Sub_id5']
       ].filter(Boolean);
       return orderSubIds.some(subId => selectedSubIds.includes(subId || ''));
     });
@@ -212,7 +234,7 @@ export function calculateMetrics(
     );
   }
 
-  // ----- Filter Lazada -----
+  // ----- Filter Lazada (คงโครงเดิม) -----
   let filteredLazadaOrders =
     selectedChannels.length > 0 && !selectedChannels.includes('all')
       ? []
@@ -223,11 +245,7 @@ export function calculateMetrics(
   if (selectedSubIds.length > 0 && !selectedSubIds.includes('all')) {
     filteredLazadaOrders = filteredLazadaOrders.filter(order => {
       const orderSubIds = [
-        order['Aff Sub ID'],
-        order['Sub ID 1'],
-        order['Sub ID 2'],
-        order['Sub ID 3'],
-        order['Sub ID 4']
+        order['Aff Sub ID'], order['Sub ID 1'], order['Sub ID 2'], order['Sub ID 3'], order['Sub ID 4']
       ].filter(Boolean);
       return orderSubIds.some(subId => selectedSubIds.includes(subId || ''));
     });
@@ -236,11 +254,11 @@ export function calculateMetrics(
     filteredLazadaOrders = filteredLazadaOrders.filter(order => order['Validity'] === selectedValidity);
   }
 
-  // ----- Shopee: dedup ตามคีย์ที่กำหนด -----
+  // ----- Shopee: dedup ตาม "รหัสการสั่งซื้อ" + รวม commission แบบสุทธิ -----
   const uniqueShopeeOrders = new Map<string, { commission: number; amount: number }>();
   filteredShopeeOrders.forEach(order => {
     const id = getShopeeOrderId(order, shopeeOrderIdKey);
-    const commission = parseNumber(order['คอมมิชชั่นสินค้าโดยรวม(฿)']);
+    const commission = getShopeeCommission(order);
     const amount = parseNumber(order['ยอดขายสินค้าโดยรวม(฿)']);
     if (!uniqueShopeeOrders.has(id)) {
       uniqueShopeeOrders.set(id, { commission, amount });
@@ -279,7 +297,7 @@ export function calculateMetrics(
   ).length;
   const invalidOrdersLZD = totalOrdersLZD - validOrdersLZD;
 
-  // ----- Facebook Ads (ตามตัวกรอง platform/channels/subIds) -----
+  // ----- Facebook Ads -----
   let filteredFacebookAds =
     selectedPlatform === 'all' || selectedPlatform === 'Facebook' ? facebookAds : [];
   if (selectedChannels.length > 0 && !selectedChannels.includes('all')) {
@@ -343,7 +361,7 @@ export function calculateMetrics(
 }
 
 /* ==============================================================
- * ✅ NEW: analyzeDailyBreakdownStable — เวอร์ชันที่ "ผลรวมรายวัน = Summary"
+ * ✅ analyzeDailyBreakdownStable — “ผลรวมรายวัน = Summary” เป๊ะ
  * ============================================================== */
 export interface DailyStableRow {
   date: string; // YYYY-MM-DD หรือ 'Unknown'
@@ -359,7 +377,6 @@ export interface DailyStableRow {
 }
 
 export function analyzeDailyBreakdownStable(
-  // ✅ แนะนำให้ใส่ "ข้อมูลที่ถูกกรองแล้ว" จาก calculateMetrics.metrics.filtered*
   shopeeInput: ShopeeOrder[],
   lazadaInput: LazadaOrder[],
   facebookAds: FacebookAd[],
@@ -368,7 +385,7 @@ export function analyzeDailyBreakdownStable(
     includeUnknownBucket?: boolean; // default true
   } = {}
 ): DailyStableRow[] {
-  const shopeeOrderIdKey = options.shopeeOrderIdKey ?? 'เลขที่คำสั่งซื้อ';
+  const shopeeOrderIdKey = options.shopeeOrderIdKey ?? 'รหัสการสั่งซื้อ';
   const includeUnknown = options.includeUnknownBucket ?? true;
 
   type DayAgg = {
@@ -381,19 +398,18 @@ export function analyzeDailyBreakdownStable(
 
   const daily: Record<string, DayAgg> = {};
 
-  // ---- Shopee: unique orders (ตัดยกเลิก) + ผูกวันที่ต่อใบ ----
+  // ---- Shopee: unique orders (ตัดยกเลิก) + ผูกวันที่ ----
   const shopeeActive = shopeeInput.filter(o => !isCanceledShopee(o));
   const shopeeUnique = new Map<string, { commission: number; dateKey: string }>();
   shopeeActive.forEach(o => {
     const id = getShopeeOrderId(o, shopeeOrderIdKey);
-    const commission = parseNumber(o['คอมมิชชั่นสินค้าโดยรวม(฿)']);
-    const dateKey = parseShopeeDateKey(o); // ใช้เวลาที่สั่งซื้อเป็นหลัก
+    const commission = getShopeeCommission(o); // ✅ ใช้สุทธิ
+    const dateKey = parseShopeeDateKey(o);
     if (!shopeeUnique.has(id)) {
       shopeeUnique.set(id, { commission, dateKey });
     } else {
       const ex = shopeeUnique.get(id)!;
       ex.commission += commission;
-      // วันที่ของออเดอร์ควรอยู่วันเดียวกันเสมอ; ถ้าไม่แน่ใจคงค่าแรกไว้
     }
   });
 
@@ -404,7 +420,7 @@ export function analyzeDailyBreakdownStable(
     daily[key].comSP += val.commission;
   });
 
-  // ---- Lazada: unique by Check Out ID + ผูกวันที่ ----
+  // ---- Lazada ----
   const lzdUnique = new Map<string, { payout: number; dateKey: string }>();
   lazadaInput.forEach(o => {
     const id = o['Check Out ID'];
@@ -425,7 +441,7 @@ export function analyzeDailyBreakdownStable(
     daily[key].comLZD += val.payout;
   });
 
-  // ---- Facebook Ads: ผูกงบกับวัน (Date/Day) ----
+  // ---- Facebook Ads: ผูกงบกับวัน ----
   facebookAds.forEach(ad => {
     const dateStr = ad['Day'] || ad['Date'] || '';
     let key = 'Unknown';
@@ -437,7 +453,7 @@ export function analyzeDailyBreakdownStable(
     daily[key].adSpend += parseNumber(ad['Amount spent (THB)']);
   });
 
-  // ---- สร้างผลลัพธ์รายวัน + คำนวณ profit/roi ----
+  // ---- สร้างผลลัพธ์รายวัน ----
   const rows: DailyStableRow[] = Object.entries(daily)
     .filter(([key]) => includeUnknown || key !== 'Unknown')
     .map(([date, agg]) => {
@@ -468,7 +484,7 @@ export function analyzeDailyBreakdownStable(
 }
 
 /* =========================
- * ฟังก์ชันอื่น ๆ (อัปเดตให้ตัด "ยกเลิก" ที่ Shopee)
+ * ฟังก์ชันอื่น ๆ (อัปเดตให้ตัด "ยกเลิก" + ใช้คอมมิชชั่นสุทธิ)
  * ========================= */
 interface SubIdPerformance {
   id: string;
@@ -491,21 +507,17 @@ export function analyzeSubIdPerformance(
   const shopeeActive = shopeeOrders.filter(o => !isCanceledShopee(o));
   const uniqueShopeeOrders = new Map<string, ShopeeOrder>();
   shopeeActive.forEach(order => {
-    const id = getShopeeOrderId(order);
+    const id = getShopeeOrderId(order, 'รหัสการสั่งซื้อ');
     if (!uniqueShopeeOrders.has(id)) uniqueShopeeOrders.set(id, order);
   });
 
   Array.from(uniqueShopeeOrders.values()).forEach(order => {
     const subIds = [
-      order['Sub_id1'],
-      order['Sub_id2'],
-      order['Sub_id3'],
-      order['Sub_id4'],
-      order['Sub_id5']
+      order['Sub_id1'], order['Sub_id2'], order['Sub_id3'], order['Sub_id4'], order['Sub_id5']
     ].filter(Boolean) as string[];
     subIds.forEach(subId => {
       if (!subIdMap[subId]) subIdMap[subId] = { commission: 0, orders: 0, adSpent: 0, platform: 'Shopee' };
-      subIdMap[subId].commission += parseNumber(order['คอมมิชชั่นสินค้าโดยรวม(฿)']);
+      subIdMap[subId].commission += getShopeeCommission(order); // ✅
       subIdMap[subId].orders++;
       subIdMap[subId].adSpent = matchSubIdWithAds(subId, facebookAds);
       if (subIdMap[subId].platform !== 'Shopee' && subIdMap[subId].platform !== 'Mixed')
@@ -522,11 +534,7 @@ export function analyzeSubIdPerformance(
 
   Array.from(uniqueLazadaOrders.values()).forEach(order => {
     const subIds = [
-      order['Aff Sub ID'],
-      order['Sub ID 1'],
-      order['Sub ID 2'],
-      order['Sub ID 3'],
-      order['Sub ID 4']
+      order['Aff Sub ID'], order['Sub ID 1'], order['Sub ID 2'], order['Sub ID 3'], order['Sub ID 4']
     ].filter(Boolean) as string[];
     subIds.forEach(subId => {
       if (!subIdMap[subId]) subIdMap[subId] = { commission: 0, orders: 0, adSpent: 0, platform: 'Lazada' };
@@ -564,11 +572,8 @@ export function analyzePlatformPerformance(
   totalAdsSpent: number
 ): PlatformPerformance[] {
   const shopeeActive = shopeeOrders.filter(o => !isCanceledShopee(o));
-  const uniqueShopeeOrders = new Set(shopeeActive.map(o => getShopeeOrderId(o)));
-  const shopeeCommission = shopeeActive.reduce(
-    (sum, o) => sum + parseNumber(o['คอมมิชชั่นสินค้าโดยรวม(฿)']),
-    0
-  );
+  const uniqueShopeeOrders = new Set(shopeeActive.map(o => getShopeeOrderId(o, 'รหัสการสั่งซื้อ')));
+  const shopeeCommission = shopeeActive.reduce((sum, o) => sum + getShopeeCommission(o), 0); // ✅
 
   const uniqueLazadaOrders = new Set(lazadaOrders.map(o => o['Check Out ID']));
   const lazadaCommission = lazadaOrders.reduce((sum, o) => sum + parseNumber(o['Payout']), 0);
@@ -615,140 +620,11 @@ export function analyzePlatformPerformance(
   return platformData;
 }
 
-// รวมคอมมิชชั่น Shopee แบบ raw แต่ไม่เอา "ยกเลิก"
+// รวมคอมมิชชั่น Shopee แบบ raw (ตัดยกเลิก) — ใช้คอลัมน์สุทธิ
 export function sumShopeeCommissionRaw(shopeeOrders: ShopeeOrder[]): number {
   return shopeeOrders
     .filter(o => !isCanceledShopee(o))
-    .reduce((sum, order) => sum + parseNumber(order['คอมมิชชั่นสินค้าโดยรวม(฿)']), 0);
-}
-
-/* =========================
- * แปลงชุดแคมเปญ (ตัดยกเลิกสำหรับ Shopee)
- * ========================= */
-export interface TraditionalCampaign {
-  id: number;
-  name: string;
-  platform: string;
-  subId: string;
-  orders: number;
-  commission: number;
-  adSpend: number;
-  roi: number;
-  status: string;
-  startDate: string;
-  performance: string;
-}
-
-export function generateTraditionalCampaigns(
-  shopeeOrders: ShopeeOrder[],
-  lazadaOrders: LazadaOrder[],
-  facebookAds: FacebookAd[]
-): TraditionalCampaign[] {
-  const campaigns: TraditionalCampaign[] = [];
-  let campaignId = 1;
-
-  // Shopee: filter active + group by subId + dedup order id
-  const shopeeActive = shopeeOrders.filter(o => !isCanceledShopee(o));
-  const shopeeSubIdGroups: { [key: string]: ShopeeOrder[] } = {};
-  shopeeActive.forEach(order => {
-    const subIds = [
-      order['Sub_id1'],
-      order['Sub_id2'],
-      order['Sub_id3'],
-      order['Sub_id4'],
-      order['Sub_id5']
-    ].filter(Boolean) as string[];
-    subIds.forEach(subId => {
-      if (!shopeeSubIdGroups[subId]) shopeeSubIdGroups[subId] = [];
-      shopeeSubIdGroups[subId].push(order);
-    });
-  });
-
-  Object.entries(shopeeSubIdGroups).forEach(([subId, orders]) => {
-    const unique = new Map<string, ShopeeOrder>();
-    orders.forEach(o => {
-      const id = getShopeeOrderId(o);
-      if (!unique.has(id)) unique.set(id, o);
-    });
-    const totalCommission = Array.from(unique.values()).reduce(
-      (s, o) => s + parseNumber(o['คอมมิชชั่นสินค้าโดยรวม(฿)']),
-      0
-    );
-    const adSpent = matchSubIdWithAds(subId, facebookAds);
-    const roi = adSpent > 0 ? ((totalCommission - adSpent) / adSpent) * 100 : 0;
-    const latestDate = Array.from(unique.values()).reduce((latest, o) => {
-      const d = new Date(o['วันที่สั่งซื้อ'] || o['เวลาที่สั่งซื้อ'] || '');
-      return d > latest ? d : latest;
-    }, new Date(0));
-    const performance =
-      roi >= 100 ? 'excellent' : roi >= 50 ? 'good' : roi >= 0 ? 'average' : 'poor';
-
-    campaigns.push({
-      id: campaignId++,
-      name: `Shopee Campaign - ${subId}`,
-      platform: 'Shopee',
-      subId,
-      orders: unique.size,
-      commission: Math.round(totalCommission * 100) / 100,
-      adSpend: Math.round(adSpent * 100) / 100,
-      roi: Math.round(roi * 10) / 10,
-      status: unique.size > 0 ? 'active' : 'paused',
-      startDate: latestDate.toISOString().split('T')[0],
-      performance
-    });
-  });
-
-  // Lazada: group by subId + dedup Check Out ID
-  const lzdSubIdGroups: { [key: string]: LazadaOrder[] } = {};
-  lazadaOrders.forEach(order => {
-    const subIds = [
-      order['Aff Sub ID'],
-      order['Sub ID 1'],
-      order['Sub ID 2'],
-      order['Sub ID 3'],
-      order['Sub ID 4']
-    ].filter(Boolean) as string[];
-    subIds.forEach(subId => {
-      if (!lzdSubIdGroups[subId]) lzdSubIdGroups[subId] = [];
-      lzdSubIdGroups[subId].push(order);
-    });
-  });
-
-  Object.entries(lzdSubIdGroups).forEach(([subId, orders]) => {
-    const unique = new Map<string, LazadaOrder>();
-    orders.forEach(o => {
-      const id = o['Check Out ID'];
-      if (!unique.has(id)) unique.set(id, o);
-    });
-    const totalCommission = Array.from(unique.values()).reduce(
-      (s, o) => s + parseNumber(o['Payout']),
-      0
-    );
-    const adSpent = matchSubIdWithAds(subId, facebookAds);
-    const roi = adSpent > 0 ? ((totalCommission - adSpent) / adSpent) * 100 : 0;
-    const latestDate = Array.from(unique.values()).reduce((latest, o) => {
-      const d = new Date(o['Order Time'] || '');
-      return d > latest ? d : latest;
-    }, new Date(0));
-    const performance =
-      roi >= 100 ? 'excellent' : roi >= 50 ? 'good' : roi >= 0 ? 'average' : 'poor';
-
-    campaigns.push({
-      id: campaignId++,
-      name: `Lazada Campaign - ${subId}`,
-      platform: 'Lazada',
-      subId,
-      orders: unique.size,
-      commission: Math.round(totalCommission * 100) / 100,
-      adSpend: Math.round(adSpent * 100) / 100,
-      roi: Math.round(roi * 10) / 10,
-      status: unique.size > 0 ? 'active' : 'paused',
-      startDate: latestDate.toISOString().split('T')[0],
-      performance
-    });
-  });
-
-  return campaigns.sort((a, b) => b.commission - a.commission);
+    .reduce((sum, order) => sum + getShopeeCommission(order), 0); // ✅
 }
 
 /* --- Compatibility shim for existing imports --- */
@@ -765,13 +641,11 @@ export function analyzeDailyPerformance(
   lazadaOrders: LazadaOrder[],
   facebookAds: FacebookAd[]
 ): DailyMetrics[] {
-  // ใช้เวอร์ชันใหม่ที่ “ผลรวมรายวัน = Summary” เป๊ะ
   const rows = analyzeDailyBreakdownStable(shopeeOrders, lazadaOrders, facebookAds, {
-    shopeeOrderIdKey: 'เลขที่คำสั่งซื้อ',
+    shopeeOrderIdKey: 'รหัสการสั่งซื้อ',
     includeUnknownBucket: true
   });
 
-  // map ให้ได้โครง DailyMetrics เดิม
   return rows.map(r => ({
     date: r.date,
     totalCom: r.totalCom,
