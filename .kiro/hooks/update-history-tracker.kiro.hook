@@ -1,0 +1,20 @@
+{
+  "enabled": true,
+  "name": "Update History Tracker",
+  "description": "Automatically updates the Update History menu whenever files in the project are modified or updated",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "src/**/*.tsx",
+      "src/**/*.ts",
+      "src/**/*.css",
+      "package.json",
+      "README.md"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "A file has been modified in the project. Please update the \"Update History\" menu to reflect this change. Add a new entry with the current timestamp, the file(s) that were changed, and a brief description of what was updated. Make sure to maintain the chronological order with the most recent updates at the top."
+  }
+}
