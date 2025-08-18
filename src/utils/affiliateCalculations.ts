@@ -113,13 +113,19 @@ const parseNumber = (value: string | number | undefined): number => {
 };
 
 const isCanceledShopee = (order: ShopeeOrder | Record<string, any>): boolean => {
-  const raw = (order['สถานะการสั่งซื้อ'] ?? order['สถานะ'] ?? '').toString().trim().toLowerCase();
+  const raw = (order['สถานะการสั่งซื้อ'] ?? order['สถานะ'] ?? '')
+    .toString()
+    .trim()
+    .toLowerCase();
   const canceledValues = new Set(['ยกเลิก', 'ถูกยกเลิก', 'cancel', 'canceled', 'cancelled']);
   return canceledValues.has(raw);
 };
 
 // เลือกคีย์ ID ของออเดอร์ Shopee ให้เสถียร (ค่าเริ่มต้นใช้ "เลขที่คำสั่งซื้อ")
-const getShopeeOrderId = (order: ShopeeOrder, preferredKey: 'เลขที่คำสั่งซื้อ' | 'รหัสการสั่งซื้อ' = 'เลขที่คำสั่งซื้อ'): string => {
+const getShopeeOrderId = (
+  order: ShopeeOrder,
+  preferredKey: 'เลขที่คำสั่งซื้อ' | 'รหัสการสั่งซื้อ' = 'เลขที่คำสั่งซื้อ'
+): string => {
   if (preferredKey === 'รหัสการสั่งซื้อ' && order['รหัสการสั่งซื้อ']) return order['รหัสการสั่งซื้อ']!;
   return order['เลขที่คำสั่งซื้อ'] ?? order['รหัสการสั่งซื้อ'] ?? '';
 };
@@ -190,7 +196,13 @@ export function calculateMetrics(
 
   if (selectedSubIds.length > 0 && !selectedSubIds.includes('all')) {
     filteredShopeeOrders = filteredShopeeOrders.filter(order => {
-      const orderSubIds = [order['Sub_id1'], order['Sub_id2'], order['Sub_id3'], order['Sub_id4'], order['Sub_id5']].filter(Boolean);
+      const orderSubIds = [
+        order['Sub_id1'],
+        order['Sub_id2'],
+        order['Sub_id3'],
+        order['Sub_id4'],
+        order['Sub_id5']
+      ].filter(Boolean);
       return orderSubIds.some(subId => selectedSubIds.includes(subId || ''));
     });
   }
@@ -210,7 +222,13 @@ export function calculateMetrics(
 
   if (selectedSubIds.length > 0 && !selectedSubIds.includes('all')) {
     filteredLazadaOrders = filteredLazadaOrders.filter(order => {
-      const orderSubIds = [order['Aff Sub ID'], order['Sub ID 1'], order['Sub ID 2'], order['Sub ID 3'], order['Sub ID 4']].filter(Boolean);
+      const orderSubIds = [
+        order['Aff Sub ID'],
+        order['Sub ID 1'],
+        order['Sub ID 2'],
+        order['Sub ID 3'],
+        order['Sub ID 4']
+      ].filter(Boolean);
       return orderSubIds.some(subId => selectedSubIds.includes(subId || ''));
     });
   }
@@ -256,8 +274,8 @@ export function calculateMetrics(
   const totalAmountLZD = Array.from(uniqueLazadaOrders.values()).reduce((s, o) => s + o.amount, 0);
   const totalOrdersLZD = uniqueLazadaOrders.size;
 
-  const validOrdersLZD = Array.from(uniqueLazadaOrders.values()).filter(o =>
-    (o.status === 'shipped' || o.status === 'delivered') || o.payout > 0
+  const validOrdersLZD = Array.from(uniqueLazadaOrders.values()).filter(
+    o => o.status === 'shipped' || o.status === 'delivered' || o.payout > 0
   ).length;
   const invalidOrdersLZD = totalOrdersLZD - validOrdersLZD;
 
@@ -279,7 +297,8 @@ export function calculateMetrics(
   const totalReach = filteredFacebookAds.reduce((s, ad) => s + parseNumber(ad['Reach']), 0);
   const avgCpcLink =
     filteredFacebookAds.length > 0
-      ? filteredFacebookAds.reduce((sum, ad) => sum + parseNumber(ad['CPC (cost per link click)']), 0) / filteredFacebookAds.length
+      ? filteredFacebookAds.reduce((sum, ad) => sum + parseNumber(ad['CPC (cost per link click)']), 0) /
+        filteredFacebookAds.length
       : 0;
 
   // ----- Derived -----
@@ -325,15 +344,9 @@ export function calculateMetrics(
 
 /* ==============================================================
  * ✅ NEW: analyzeDailyBreakdownStable — เวอร์ชันที่ "ผลรวมรายวัน = Summary"
- *      หลักการ:
- *        1) ใช้ชุดข้อมูลหลังกรองเหมือน summary (ส่ง filtered เข้ามาได้)
- *        2) สร้าง "รายการออเดอร์แบบ unique" ก่อน (เหมือนใน calculateMetrics)
- *        3) ผูกออเดอร์ unique แต่ละใบเข้ากับวันที่เดียว (แยกตามคีย์เวลา)
- *        4) รวมยอดรายวันจาก "unique orders" เท่านั้น → ผลรวมจะเท่ากับ summary เสมอ
- *        5) ถ้า parse วันที่ไม่ได้ จะลง bucket 'Unknown' เพื่อไม่ให้ยอดหาย
  * ============================================================== */
 export interface DailyStableRow {
-  date: string;           // YYYY-MM-DD หรือ 'Unknown'
+  date: string; // YYYY-MM-DD หรือ 'Unknown'
   ordersSP: number;
   ordersLZD: number;
   ordersTotal: number;
@@ -471,7 +484,8 @@ export function analyzeSubIdPerformance(
   lazadaOrders: LazadaOrder[],
   facebookAds: FacebookAd[]
 ): SubIdPerformance[] {
-  const subIdMap: { [key: string]: { commission: number; orders: number; adSpent: number; platform: string } } = {};
+  const subIdMap: { [key: string]: { commission: number; orders: number; adSpent: number; platform: string } } =
+    {};
 
   // Shopee (ตัดยกเลิก + dedup order id)
   const shopeeActive = shopeeOrders.filter(o => !isCanceledShopee(o));
@@ -482,13 +496,20 @@ export function analyzeSubIdPerformance(
   });
 
   Array.from(uniqueShopeeOrders.values()).forEach(order => {
-    const subIds = [order['Sub_id1'], order['Sub_id2'], order['Sub_id3'], order['Sub_id4'], order['Sub_id5']].filter(Boolean) as string[];
+    const subIds = [
+      order['Sub_id1'],
+      order['Sub_id2'],
+      order['Sub_id3'],
+      order['Sub_id4'],
+      order['Sub_id5']
+    ].filter(Boolean) as string[];
     subIds.forEach(subId => {
       if (!subIdMap[subId]) subIdMap[subId] = { commission: 0, orders: 0, adSpent: 0, platform: 'Shopee' };
       subIdMap[subId].commission += parseNumber(order['คอมมิชชั่นสินค้าโดยรวม(฿)']);
       subIdMap[subId].orders++;
       subIdMap[subId].adSpent = matchSubIdWithAds(subId, facebookAds);
-      if (subIdMap[subId].platform !== 'Shopee' && subIdMap[subId].platform !== 'Mixed') subIdMap[subId].platform = 'Mixed';
+      if (subIdMap[subId].platform !== 'Shopee' && subIdMap[subId].platform !== 'Mixed')
+        subIdMap[subId].platform = 'Mixed';
     });
   });
 
@@ -500,13 +521,20 @@ export function analyzeSubIdPerformance(
   });
 
   Array.from(uniqueLazadaOrders.values()).forEach(order => {
-    const subIds = [order['Aff Sub ID'], order['Sub ID 1'], order['Sub ID 2'], order['Sub ID 3'], order['Sub ID 4']].filter(Boolean) as string[];
+    const subIds = [
+      order['Aff Sub ID'],
+      order['Sub ID 1'],
+      order['Sub ID 2'],
+      order['Sub ID 3'],
+      order['Sub ID 4']
+    ].filter(Boolean) as string[];
     subIds.forEach(subId => {
       if (!subIdMap[subId]) subIdMap[subId] = { commission: 0, orders: 0, adSpent: 0, platform: 'Lazada' };
       subIdMap[subId].commission += parseNumber(order['Payout']);
       subIdMap[subId].orders++;
       subIdMap[subId].adSpent = matchSubIdWithAds(subId, facebookAds);
-      if (subIdMap[subId].platform !== 'Lazada' && subIdMap[subId].platform !== 'Mixed') subIdMap[subId].platform = 'Mixed';
+      if (subIdMap[subId].platform !== 'Lazada' && subIdMap[subId].platform !== 'Mixed')
+        subIdMap[subId].platform = 'Mixed';
     });
   });
 
@@ -537,7 +565,10 @@ export function analyzePlatformPerformance(
 ): PlatformPerformance[] {
   const shopeeActive = shopeeOrders.filter(o => !isCanceledShopee(o));
   const uniqueShopeeOrders = new Set(shopeeActive.map(o => getShopeeOrderId(o)));
-  const shopeeCommission = shopeeActive.reduce((sum, o) => sum + parseNumber(o['คอมมิชชั่นสินค้าโดยรวม(฿)']), 0);
+  const shopeeCommission = shopeeActive.reduce(
+    (sum, o) => sum + parseNumber(o['คอมมิชชั่นสินค้าโดยรวม(฿)']),
+    0
+  );
 
   const uniqueLazadaOrders = new Set(lazadaOrders.map(o => o['Check Out ID']));
   const lazadaCommission = lazadaOrders.reduce((sum, o) => sum + parseNumber(o['Payout']), 0);
@@ -546,9 +577,39 @@ export function analyzePlatformPerformance(
   const lazadaROI = totalAdsSpent > 0 ? (lazadaCommission / totalAdsSpent) * 100 : 0;
 
   const platformData: PlatformPerformance[] = [
-    { id: 1, platform: 'Shopee', icon: '🛒', orders: uniqueShopeeOrders.size, commission: shopeeCommission, adSpend: totalAdsSpent / 2, roi: shopeeROI, status: shopeeROI > 50 ? 'good' : 'average', change: 5.2 },
-    { id: 2, platform: 'Lazada', icon: '🛍️', orders: uniqueLazadaOrders.size, commission: lazadaCommission, adSpend: totalAdsSpent / 2, roi: lazadaROI, status: lazadaROI > 60 ? 'excellent' : 'good', change: -2.8 },
-    { id: 3, platform: 'Facebook Ads', icon: '📘', orders: 0, commission: 0, adSpend: totalAdsSpent, roi: totalAdsSpent > 0 ? ((totalAdsSpent * 0.2) / totalAdsSpent) * 100 : 0, status: totalAdsSpent > 0 ? 'average' : 'bad', change: 12.5 }
+    {
+      id: 1,
+      platform: 'Shopee',
+      icon: '🛒',
+      orders: uniqueShopeeOrders.size,
+      commission: shopeeCommission,
+      adSpend: totalAdsSpent / 2,
+      roi: shopeeROI,
+      status: shopeeROI > 50 ? 'good' : 'average',
+      change: 5.2
+    },
+    {
+      id: 2,
+      platform: 'Lazada',
+      icon: '🛍️',
+      orders: uniqueLazadaOrders.size,
+      commission: lazadaCommission,
+      adSpend: totalAdsSpent / 2,
+      roi: lazadaROI,
+      status: lazadaROI > 60 ? 'excellent' : 'good',
+      change: -2.8
+    },
+    {
+      id: 3,
+      platform: 'Facebook Ads',
+      icon: '📘',
+      orders: 0,
+      commission: 0,
+      adSpend: totalAdsSpent,
+      roi: totalAdsSpent > 0 ? ((totalAdsSpent * 0.2) / totalAdsSpent) * 100 : 0,
+      status: totalAdsSpent > 0 ? 'average' : 'bad',
+      change: 12.5
+    }
   ];
 
   return platformData;
@@ -590,7 +651,13 @@ export function generateTraditionalCampaigns(
   const shopeeActive = shopeeOrders.filter(o => !isCanceledShopee(o));
   const shopeeSubIdGroups: { [key: string]: ShopeeOrder[] } = {};
   shopeeActive.forEach(order => {
-    const subIds = [order['Sub_id1'], order['Sub_id2'], order['Sub_id3'], order['Sub_id4'], order['Sub_id5']].filter(Boolean) as string[];
+    const subIds = [
+      order['Sub_id1'],
+      order['Sub_id2'],
+      order['Sub_id3'],
+      order['Sub_id4'],
+      order['Sub_id5']
+    ].filter(Boolean) as string[];
     subIds.forEach(subId => {
       if (!shopeeSubIdGroups[subId]) shopeeSubIdGroups[subId] = [];
       shopeeSubIdGroups[subId].push(order);
@@ -603,14 +670,18 @@ export function generateTraditionalCampaigns(
       const id = getShopeeOrderId(o);
       if (!unique.has(id)) unique.set(id, o);
     });
-    const totalCommission = Array.from(unique.values()).reduce((s, o) => s + parseNumber(o['คอมมิชชั่นสินค้าโดยรวม(฿)']), 0);
+    const totalCommission = Array.from(unique.values()).reduce(
+      (s, o) => s + parseNumber(o['คอมมิชชั่นสินค้าโดยรวม(฿)']),
+      0
+    );
     const adSpent = matchSubIdWithAds(subId, facebookAds);
     const roi = adSpent > 0 ? ((totalCommission - adSpent) / adSpent) * 100 : 0;
     const latestDate = Array.from(unique.values()).reduce((latest, o) => {
       const d = new Date(o['วันที่สั่งซื้อ'] || o['เวลาที่สั่งซื้อ'] || '');
       return d > latest ? d : latest;
     }, new Date(0));
-    const performance = roi >= 100 ? 'excellent' : roi >= 50 ? 'good' : roi >= 0 ? 'average' : 'poor';
+    const performance =
+      roi >= 100 ? 'excellent' : roi >= 50 ? 'good' : roi >= 0 ? 'average' : 'poor';
 
     campaigns.push({
       id: campaignId++,
@@ -630,7 +701,13 @@ export function generateTraditionalCampaigns(
   // Lazada: group by subId + dedup Check Out ID
   const lzdSubIdGroups: { [key: string]: LazadaOrder[] } = {};
   lazadaOrders.forEach(order => {
-    const subIds = [order['Aff Sub ID'], order['Sub ID 1'], order['Sub ID 2'], order['Sub ID 3'], order['Sub ID 4']].filter(Boolean) as string[];
+    const subIds = [
+      order['Aff Sub ID'],
+      order['Sub ID 1'],
+      order['Sub ID 2'],
+      order['Sub ID 3'],
+      order['Sub ID 4']
+    ].filter(Boolean) as string[];
     subIds.forEach(subId => {
       if (!lzdSubIdGroups[subId]) lzdSubIdGroups[subId] = [];
       lzdSubIdGroups[subId].push(order);
@@ -643,14 +720,18 @@ export function generateTraditionalCampaigns(
       const id = o['Check Out ID'];
       if (!unique.has(id)) unique.set(id, o);
     });
-    const totalCommission = Array.from(unique.values()).reduce((s, o) => s + parseNumber(o['Payout']), 0);
+    const totalCommission = Array.from(unique.values()).reduce(
+      (s, o) => s + parseNumber(o['Payout']),
+      0
+    );
     const adSpent = matchSubIdWithAds(subId, facebookAds);
     const roi = adSpent > 0 ? ((totalCommission - adSpent) / adSpent) * 100 : 0;
     const latestDate = Array.from(unique.values()).reduce((latest, o) => {
       const d = new Date(o['Order Time'] || '');
       return d > latest ? d : latest;
     }, new Date(0));
-    const performance = roi >= 100 ? 'excellent' : roi >= 50 ? 'good' : roi >= 0 ? 'average' : 'poor';
+    const performance =
+      roi >= 100 ? 'excellent' : roi >= 50 ? 'good' : roi >= 0 ? 'average' : 'poor';
 
     campaigns.push({
       id: campaignId++,
@@ -668,8 +749,9 @@ export function generateTraditionalCampaigns(
   });
 
   return campaigns.sort((a, b) => b.commission - a.commission);
-  // --- Compatibility shim for existing imports ---
-// ให้ type ตรงกับของเดิม
+}
+
+/* --- Compatibility shim for existing imports --- */
 export interface DailyMetrics {
   date: string;
   totalCom: number;
@@ -678,7 +760,6 @@ export interface DailyMetrics {
   roi: number;
 }
 
-// คืน analyzeDailyPerformance ให้ไฟล์อื่นที่ยัง import อยู่ใช้ได้ต่อ
 export function analyzeDailyPerformance(
   shopeeOrders: ShopeeOrder[],
   lazadaOrders: LazadaOrder[],
@@ -687,7 +768,7 @@ export function analyzeDailyPerformance(
   // ใช้เวอร์ชันใหม่ที่ “ผลรวมรายวัน = Summary” เป๊ะ
   const rows = analyzeDailyBreakdownStable(shopeeOrders, lazadaOrders, facebookAds, {
     shopeeOrderIdKey: 'เลขที่คำสั่งซื้อ',
-    includeUnknownBucket: true,
+    includeUnknownBucket: true
   });
 
   // map ให้ได้โครง DailyMetrics เดิม
@@ -696,8 +777,6 @@ export function analyzeDailyPerformance(
     totalCom: r.totalCom,
     adSpend: r.adSpend,
     profit: r.profit,
-    roi: r.roi,
+    roi: r.roi
   }));
-}
-
 }
