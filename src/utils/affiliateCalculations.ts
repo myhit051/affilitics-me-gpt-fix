@@ -675,3 +675,162 @@ function matchSubIdWithAds(subId: string, facebookAds: FacebookAd[]): number {
     return total;
   }, 0);
 }
+
+/* =========================
+ * TraditionalCampaign + generateTraditionalCampaigns
+ * ========================= */
+
+export interface TraditionalCampaign {
+  id: number;
+  name: string;
+  platform: 'Shopee' | 'Lazada';
+  subId: string;
+  orders: number;
+  commission: number;
+  adSpend: number;
+  roi: number;              // (%)
+  status: 'active' | 'paused';
+  startDate: string;        // YYYY-MM-DD
+  performance: 'excellent' | 'good' | 'average' | 'poor';
+}
+
+/**
+ * สร้างรายการแคมเปญตาม Sub ID แยก Shopee / Lazada
+ * - Shopee: ตัด "ยกเลิก", รวมคอมมิชชั่น "ต่อออเดอร์" ด้วย CommissionMode (net/orderTotal/itemTotal)
+ * - Lazada: dedup ตาม Check Out ID แล้วรวม Payout
+ * - Ad spend: จับคู่แบบหยาบจากชื่อแคมเปญ/แอดที่มี subId อยู่ในข้อความ (matchSubIdWithAds)
+ */
+export function generateTraditionalCampaigns(
+  shopeeOrders: ShopeeOrder[],
+  lazadaOrders: LazadaOrder[],
+  facebookAds: FacebookAd[],
+  commissionMode: CommissionMode = 'net'
+): TraditionalCampaign[] {
+  const campaigns: TraditionalCampaign[] = [];
+  let campaignId = 1;
+
+  /* ---------- Shopee ---------- */
+  const shopeeActive = shopeeOrders.filter(o => !isCanceledShopee(o));
+  // รวมต่อออเดอร์ (ใช้อะไรที่เรามีอยู่แล้ว)
+  const shpAgg = aggregateShopeeByOrder(shopeeActive, 'รหัสการสั่งซื้อ');
+
+  // map: orderId -> subIds[]
+  const orderSubIds = new Map<string, Set<string>>();
+  const orderDate   = new Map<string, string>(); // YYYY-MM-DD
+  for (const row of shopeeActive) {
+    const id = getShopeeOrderId(row, 'รหัสการสั่งซื้อ');
+    if (!id) continue;
+    const set = orderSubIds.get(id) ?? new Set<string>();
+    [row['Sub_id1'], row['Sub_id2'], row['Sub_id3'], row['Sub_id4'], row['Sub_id5']]
+      .filter(Boolean)
+      .forEach(s => set.add(s as string));
+    orderSubIds.set(id, set);
+    // เก็บวันที่ล่าสุดของออเดอร์
+    const dk = parseShopeeDateKey(row);
+    const prev = orderDate.get(id);
+    if (!prev || dk > prev) orderDate.set(id, dk);
+  }
+
+  // สรุปเป็นราย subId
+  const shpBySub: Record<string, { orders: number; commission: number; latest: string }> = {};
+  shpAgg.forEach((agg, orderId) => {
+    const commission = pickCommissionFromAgg(agg, commissionMode);
+    const subIds = orderSubIds.get(orderId);
+    const latest = orderDate.get(orderId) || 'Unknown';
+    const targetSubs = subIds && subIds.size > 0 ? Array.from(subIds) : ['(none)'];
+    targetSubs.forEach(sub => {
+      if (!shpBySub[sub]) shpBySub[sub] = { orders: 0, commission: 0, latest: '0000-00-00' };
+      shpBySub[sub].orders += 1;
+      shpBySub[sub].commission += commission;
+      if (latest > shpBySub[sub].latest) shpBySub[sub].latest = latest;
+    });
+  });
+
+  Object.entries(shpBySub).forEach(([subId, data]) => {
+    const adSpent = matchSubIdWithAds(subId, facebookAds);
+    const roi = adSpent > 0 ? ((data.commission - adSpent) / adSpent) * 100 : 0;
+    const performance: TraditionalCampaign['performance'] =
+      roi >= 100 ? 'excellent' : roi >= 50 ? 'good' : roi >= 0 ? 'average' : 'poor';
+
+    campaigns.push({
+      id: campaignId++,
+      name: `Shopee Campaign - ${subId}`,
+      platform: 'Shopee',
+      subId,
+      orders: data.orders,
+      commission: Math.round(data.commission * 100) / 100,
+      adSpend: Math.round(adSpent * 100) / 100,
+      roi: Math.round(roi * 10) / 10,
+      status: data.orders > 0 ? 'active' : 'paused',
+      startDate: (data.latest && data.latest !== 'Unknown') ? data.latest : '0000-00-00',
+      performance
+    });
+  });
+
+  /* ---------- Lazada ---------- */
+  const lzdUnique = new Map<string, LazadaOrder>();
+  lazadaOrders.forEach(o => {
+    const id = o['Check Out ID'];
+    if (id && !lzdUnique.has(id)) lzdUnique.set(id, o);
+  });
+
+  const lzdBySub: Record<string, { orders: number; commission: number; latest: string }> = {};
+  Array.from(lzdUnique.values()).forEach(order => {
+    const subIds = [
+      order['Aff Sub ID'],
+      order['Sub ID 1'],
+      order['Sub ID 2'],
+      order['Sub ID 3'],
+      order['Sub ID 4']
+    ].filter(Boolean) as string[];
+
+    const payout = parseNumber(order['Payout']);
+    // วันใช้ Order Time/Conversion Time ที่ parse แล้ว max
+    const dk = (() => {
+      const keys = [order['Order Time'], order['Conversion Time']].filter(Boolean) as string[];
+      const dates = keys
+        .map(k => {
+          const d = new Date(k);
+          if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
+          const df = new Date(k.replace(/(\d{2})-(\d{2})-(\d{4})/, '$2-$1-$3'));
+          return !isNaN(df.getTime()) ? df.toISOString().split('T')[0] : '0000-00-00';
+        })
+        .sort();
+      return dates.length ? dates[dates.length - 1] : '0000-00-00';
+    })();
+
+    const targets = subIds.length ? subIds : ['(none)'];
+    targets.forEach(sub => {
+      if (!lzdBySub[sub]) lzdBySub[sub] = { orders: 0, commission: 0, latest: '0000-00-00' };
+      lzdBySub[sub].orders += 1;
+      lzdBySub[sub].commission += payout;
+      if (dk > lzdBySub[sub].latest) lzdBySub[sub].latest = dk;
+    });
+  });
+
+  Object.entries(lzdBySub).forEach(([subId, data]) => {
+    const adSpent = matchSubIdWithAds(subId, facebookAds);
+    const roi = adSpent > 0 ? ((data.commission - adSpent) / adSpent) * 100 : 0;
+    const performance: TraditionalCampaign['performance'] =
+      roi >= 100 ? 'excellent' : roi >= 50 ? 'good' : roi >= 0 ? 'average' : 'poor';
+
+    campaigns.push({
+      id: campaignId++,
+      name: `Lazada Campaign - ${subId}`,
+      platform: 'Lazada',
+      subId,
+      orders: data.orders,
+      commission: Math.round(data.commission * 100) / 100,
+      adSpend: Math.round(adSpent * 100) / 100,
+      roi: Math.round(roi * 10) / 10,
+      status: data.orders > 0 ? 'active' : 'paused',
+      startDate: data.latest,
+      performance
+    });
+  });
+
+  // เรียงตามคอมมิชชั่นมาก→น้อย
+  return campaigns.sort((a, b) => b.commission - a.commission);
+}
+
+
