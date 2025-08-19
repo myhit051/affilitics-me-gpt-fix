@@ -10,7 +10,6 @@ import {
   Legend,
   ResponsiveContainer
 } from "recharts";
-import { format, isValid } from "date-fns";
 import { DateRange } from "react-day-picker";
 
 interface AffiliatePerformanceChartProps {
@@ -24,7 +23,27 @@ interface AffiliatePerformanceChartProps {
   selectedPlatform?: string;
 }
 
-/* ---------------- helpers for robust fallback ---------------- */
+/* ---------------- helpers: pure-YYYY-MM-DD, no timezone ---------------- */
+const ymd = (y: number, m: number, d: number) =>
+  `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+
+const dateToYMD = (dt: Date): string => ymd(dt.getFullYear(), dt.getMonth() + 1, dt.getDate());
+
+const ymdToLabel = (s: string, withYear = false) => {
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return s || '';
+  return withYear ? `${m[3]}/${m[2]}/${m[1]}` : `${m[3]}/${m[2]}`;
+};
+
+const ymdAddDays = (s: string, delta: number): string => {
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return s;
+  const dt = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + delta);
+  return dateToYMD(dt);
+};
+
+const ymdCompare = (a: string, b: string) => a.localeCompare(b);
+
 const parseDateKeyLoose = (s?: string): string => {
   const str = (s || "").trim();
   if (!str) return "Unknown";
@@ -33,11 +52,8 @@ const parseDateKeyLoose = (s?: string): string => {
   m = str.match(/^(\d{2})[-/](\d{2})[-/](\d{4})/);
   if (m) return `${m[3]}-${m[2]}-${m[1]}`;
   const d = new Date(str);
-  if (!isValid(d)) return "Unknown";
-  const y = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${y}-${mm}-${dd}`;
+  if (Number.isNaN(d.getTime())) return "Unknown";
+  return dateToYMD(d);
 };
 
 const isCanceledShopeeFallback = (o: any): boolean => {
@@ -45,9 +61,8 @@ const isCanceledShopeeFallback = (o: any): boolean => {
   return new Set(['ยกเลิก', 'ถูกยกเลิก', 'cancel', 'canceled', 'cancelled']).has(raw);
 };
 
-const getShopeeOrderIdSafe = (o: any): string => {
-  return (o['รหัสการสั่งซื้อ'] ?? o['เลขที่คำสั่งซื้อ'] ?? '').toString();
-};
+const getShopeeOrderIdSafe = (o: any): string =>
+  (o['รหัสการสั่งซื้อ'] ?? o['เลขที่คำสั่งซื้อ'] ?? '').toString();
 
 const parseNumber = (v: any): number => {
   if (v === undefined || v === null) return 0;
@@ -67,7 +82,7 @@ const pickCommissionFromAgg = (agg: {
   if (bestOrder > 0) return bestOrder;
   return agg.itemTotalSum;
 };
-/* ------------------------------------------------------------- */
+/* ---------------------------------------------------------------------- */
 
 export default function AffiliatePerformanceChart({
   dailyMetrics = [],
@@ -81,15 +96,15 @@ export default function AffiliatePerformanceChart({
 }: AffiliatePerformanceChartProps) {
 
   const chartData = useMemo(() => {
-    // ✅ ถ้าส่ง dailyMetrics (จาก analyzeDailyBreakdownStable) มาแล้ว ให้ใช้เลย
+    // ถ้ามี dailyMetrics (จาก analyzeDailyBreakdownStable) ใช้เลย
     if (dailyMetrics && dailyMetrics.length > 0) {
-      return dailyMetrics.map(day => ({
-        date: day.date,
+      return dailyMetrics.map((day: any) => ({
+        date: day.date, // 'YYYY-MM-DD'
         adSpend: day.adSpend,
         totalCom: day.totalCom,
         totalProfit: day.profit,
         overallROI: day.roi,
-        displayDate: format(new Date(day.date), 'MM/dd')
+        displayDate: ymdToLabel(day.date, false)
       }));
     }
 
@@ -98,19 +113,17 @@ export default function AffiliatePerformanceChart({
     let filteredLazada = (lazadaOrders || []);
     let filteredAds = (facebookAds || []);
 
-    // Filter by Sub IDs (ลองหลายชื่อคอลัมน์ที่เจอทั่วไป)
+    // Filter by Sub IDs
     if (selectedSubIds.length > 0) {
       const toSet = new Set(selectedSubIds.filter(Boolean));
       const match = (v?: string) => v && toSet.has(v);
       filteredShopee = filteredShopee.filter(o =>
-        [o['Sub_id1'], o['Sub_id2'], o['Sub_id3'], o['Sub_id4'], o['Sub_id5'], o['Sub ID']]
-          .some(match as any)
+        [o['Sub_id1'], o['Sub_id2'], o['Sub_id3'], o['Sub_id4'], o['Sub_id5'], o['Sub ID']].some(match as any)
       );
       filteredLazada = filteredLazada.filter(o =>
-        [o['Aff Sub ID'], o['Sub ID 1'], o['Sub ID 2'], o['Sub ID 3'], o['Sub ID 4'], o['Sub ID']]
-          .some(match as any)
+        [o['Aff Sub ID'], o['Sub ID 1'], o['Sub ID 2'], o['Sub ID 3'], o['Sub ID 4'], o['Sub ID']].some(match as any)
       );
-      filteredAds = filteredAds.filter(ad => match(ad['Sub ID'] || ad['SubID']));
+      filteredAds = filteredAds.filter(ad => match(ad['Sub ID'] || (ad as any)['SubID']));
     }
 
     // Filter by Channels (Shopee เท่านั้น)
@@ -128,11 +141,11 @@ export default function AffiliatePerformanceChart({
       }
     }
 
-    // สร้างช่วงวันที่
-    let startDate: Date, endDate: Date;
+    // ช่วงวันที่ (ใช้ YMD string เท่านั้น)
+    let fromKey: string | undefined, toKey: string | undefined;
     if (dateRange?.from && dateRange?.to) {
-      startDate = new Date(dateRange.from);
-      endDate = new Date(dateRange.to);
+      fromKey = dateToYMD(dateRange.from);
+      toKey = dateToYMD(dateRange.to);
     } else {
       const allDates: string[] = [];
       filteredAds.forEach(ad => {
@@ -148,13 +161,13 @@ export default function AffiliatePerformanceChart({
         if (k !== 'Unknown') allDates.push(k);
       });
       if (allDates.length === 0) return [];
-      const min = allDates.reduce((a, b) => (a < b ? a : b));
-      const max = allDates.reduce((a, b) => (a > b ? a : b));
-      startDate = new Date(min);
-      endDate = new Date(max);
+      allDates.sort(ymdCompare);
+      fromKey = allDates[0];
+      toKey = allDates[allDates.length - 1];
     }
+    if (!fromKey || !toKey) return [];
 
-    // เตรียม dataMap
+    // เตรียม dataMap ด้วย YMD ล้วน
     const dataMap = new Map<string, {
       date: string;
       adSpend: number;
@@ -162,14 +175,10 @@ export default function AffiliatePerformanceChart({
       totalProfit: number;
       overallROI: number;
     }>();
-    const cur = new Date(startDate);
-    while (cur <= endDate) {
-      const y = cur.getFullYear();
-      const m = String(cur.getMonth() + 1).padStart(2, '0');
-      const d = String(cur.getDate()).padStart(2, '0');
-      const key = `${y}-${m}-${d}`;
-      dataMap.set(key, { date: key, adSpend: 0, totalCom: 0, totalProfit: 0, overallROI: 0 });
-      cur.setDate(cur.getDate() + 1);
+    let cursor = fromKey;
+    while (ymdCompare(cursor, toKey) <= 0) {
+      dataMap.set(cursor, { date: cursor, adSpend: 0, totalCom: 0, totalProfit: 0, overallROI: 0 });
+      cursor = ymdAddDays(cursor, 1);
     }
 
     // Ads → adSpend
@@ -216,22 +225,19 @@ export default function AffiliatePerformanceChart({
       if (row) row.totalCom += parseNumber(o['Commission'] ?? o['Payout']);
     });
 
-    // สรุปผล
+    // สรุปผล + label แบบไม่พึ่ง Date
     const result = Array.from(dataMap.values()).map(r => {
       r.totalProfit = r.totalCom - r.adSpend;
       r.overallROI = r.adSpend > 0 ? (r.totalProfit / r.adSpend) * 100 : 0;
-      return { ...r, displayDate: format(new Date(r.date), 'MM/dd') };
+      return { ...r, displayDate: ymdToLabel(r.date, false) };
     });
 
-    return result.sort((a, b) => a.date.localeCompare(b.date));
+    return result.sort((a, b) => ymdCompare(a.date, b.date));
   }, [dailyMetrics, shopeeOrders, lazadaOrders, facebookAds, dateRange, selectedSubIds, selectedChannels, selectedPlatform]);
 
   const formatCurrency = (value: number) => {
     const rounded = Math.round(value * 100) / 100;
-    return rounded.toLocaleString('en-US', {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 2
-    });
+    return rounded.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
   };
 
   return (
@@ -256,21 +262,21 @@ export default function AffiliatePerformanceChart({
                 orientation="left"
                 className="text-xs"
                 tick={{ fontSize: 12 }}
-                tickFormatter={(value) => formatCurrency(value)}
+                tickFormatter={(value) => formatCurrency(value as number)}
               />
               <YAxis
                 yAxisId="percentage"
                 orientation="right"
                 className="text-xs"
                 tick={{ fontSize: 12 }}
-                tickFormatter={(value) => `${(value as number).toFixed(1)}%`}
+                tickFormatter={(value) => `${Number(value).toFixed(1)}%`}
               />
               <Tooltip
                 formatter={(value: number, name: string) => {
                   if (name === 'Overall ROI') return [`${value.toFixed(1)}%`, name];
                   return [formatCurrency(value), name];
                 }}
-                labelFormatter={(label) => `วันที่: ${label}`}
+                labelFormatter={(label: string) => `วันที่: ${label}`}
                 contentStyle={{
                   backgroundColor: 'hsl(var(--card))',
                   border: '1px solid hsl(var(--border))',
