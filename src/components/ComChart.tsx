@@ -11,22 +11,20 @@ import {
   Legend,
   ResponsiveContainer
 } from "recharts";
-import { format } from "date-fns";
 import { DollarSign } from "lucide-react";
 
 interface ComChartProps {
-  // ✅ ต้องส่ง dailyMetrics ที่มาจาก analyzeDailyBreakdownStable()
+  // ต้องส่ง dailyMetrics ที่มาจาก analyzeDailyBreakdownStable()
   dailyMetrics: DailyData[];
   calculatedMetrics?: any;
 }
 
 interface DailyData {
-  date: string;
+  date: string;     // 'YYYY-MM-DD'
   totalCom: number;
   adSpend: number;
   profit: number;
   roi: number;
-  // ✅ ใช้คอมมิชชั่นรายวันแยกแพลตฟอร์มจาก utils
   comSP?: number;
   comLZD?: number;
 }
@@ -39,42 +37,40 @@ interface StatOption {
 }
 
 const COM_STAT_OPTIONS: StatOption[] = [
-  { key: 'comSP', label: 'Com SP', color: '#f97316', dataKey: 'comSP' },
-  { key: 'comLZD', label: 'Com LZD', color: '#a855f7', dataKey: 'comLZD' },
+  { key: 'comSP',    label: 'Com SP',    color: '#f97316', dataKey: 'comSP' },
+  { key: 'comLZD',   label: 'Com LZD',   color: '#a855f7', dataKey: 'comLZD' },
   { key: 'totalCom', label: 'Total Com', color: '#10b981', dataKey: 'totalCom' },
 ];
+
+// ---------- helpers: no-timezone formatting ----------
+const ymdToLabel = (ymd: string, withYear = false) => {
+  const m = ymd.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return ymd || '';
+  return withYear ? `${m[3]}/${m[2]}/${m[1]}` : `${m[3]}/${m[2]}`;
+};
+// -----------------------------------------------------
 
 export default function ComChart({ dailyMetrics }: ComChartProps) {
   const [selectedStats, setSelectedStats] = useState<string[]>(['comSP', 'comLZD', 'totalCom']);
 
   const formatCurrency = (value: number) => {
     const rounded = Math.round(value * 100) / 100;
-    return rounded.toLocaleString('en-US', {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0
-    });
+    return rounded.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
   };
 
-  // ✅ ไม่แบ่งสัดส่วนจากยอดรวมอีกต่อไป — ใช้ค่าจริงจาก utils
+  // ใช้ค่าจริงจาก utils ไม่แบ่งสัดส่วนเอง
   const chartData = useMemo(() => {
     return (dailyMetrics || []).map(day => {
       const comSP = Number(day.comSP ?? 0);
       const comLZD = Number(day.comLZD ?? 0);
       const totalCom = Number(day.totalCom ?? (comSP + comLZD));
-      return {
-        date: day.date,
-        comSP,
-        comLZD,
-        totalCom
-      };
+      return { date: day.date, comSP, comLZD, totalCom };
     });
   }, [dailyMetrics]);
 
   const handleStatToggle = (statKey: string) => {
     setSelectedStats(prev =>
-      prev.includes(statKey)
-        ? prev.filter(s => s !== statKey)
-        : [...prev, statKey]
+      prev.includes(statKey) ? prev.filter(s => s !== statKey) : [...prev, statKey]
     );
   };
 
@@ -82,7 +78,7 @@ export default function ComChart({ dailyMetrics }: ComChartProps) {
     if (active && payload && payload.length) {
       return (
         <div className="bg-card border border-border rounded-lg p-3 shadow-lg">
-          <p className="font-medium text-white mb-2">{format(new Date(label), 'dd/MM/yyyy')}</p>
+          <p className="font-medium text-white mb-2">{ymdToLabel(label, true)}</p>
           {payload.map((entry: any, index: number) => (
             <p key={index} className="text-sm" style={{ color: entry.color }}>
               {entry.name}: {formatCurrency(entry.value)}
@@ -149,7 +145,7 @@ export default function ComChart({ dailyMetrics }: ComChartProps) {
                   dataKey="date"
                   stroke="#9CA3AF"
                   fontSize={12}
-                  tickFormatter={(value) => format(new Date(value), 'dd/MM')}
+                  tickFormatter={(value: string) => ymdToLabel(value)}
                 />
                 <YAxis stroke="#9CA3AF" fontSize={12} />
                 <Tooltip content={<CustomTooltip />} />
