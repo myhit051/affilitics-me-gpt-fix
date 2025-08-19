@@ -1,12 +1,21 @@
 import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer
+} from "recharts";
 import { format } from "date-fns";
 import { ShoppingCart } from "lucide-react";
-import { useImportedData } from "@/hooks/useImportedData";
 
 interface OrderChartProps {
+  // ✅ ต้องส่ง dailyMetrics ที่มาจาก analyzeDailyBreakdownStable()
   dailyMetrics: DailyData[];
   calculatedMetrics?: any;
 }
@@ -17,6 +26,10 @@ interface DailyData {
   adSpend: number;
   profit: number;
   roi: number;
+  // ✅ ใช้ข้อมูลคำสั่งซื้อจาก utils โดยตรง
+  ordersSP?: number;
+  ordersLZD?: number;
+  ordersTotal?: number;
 }
 
 interface StatOption {
@@ -32,32 +45,24 @@ const ORDER_STAT_OPTIONS: StatOption[] = [
   { key: 'totalOrders', label: 'Total Orders', color: '#10b981', dataKey: 'totalOrders' },
 ];
 
-export default function OrderChart({
-  dailyMetrics,
-  calculatedMetrics
-}: OrderChartProps) {
+export default function OrderChart({ dailyMetrics }: OrderChartProps) {
   const [selectedStats, setSelectedStats] = useState<string[]>(['orderSP', 'orderLZD', 'totalOrders']);
-  const { uniqueShopeeOrderCount } = useImportedData();
 
-  const formatNumber = (value: number) => {
-    return Math.round(value).toLocaleString('en-US');
-  };
+  const formatNumber = (value: number) => Math.round(value).toLocaleString('en-US');
 
+  // ✅ ไม่เดา/ถัวเฉลี่ยจากยอดคอมมิชชั่นอีกต่อไป — ใช้ค่าจริงจาก utils
   const chartData = useMemo(() => {
-    if (dailyMetrics.length > 0) {
-      const totalCom = dailyMetrics.reduce((sum, day) => sum + day.totalCom, 0) || 1;
-      return dailyMetrics.map(day => ({
-        ...day,
-        orderSP: Math.round(uniqueShopeeOrderCount * (day.totalCom / totalCom)),
-        // orderLZD: ... (คำนวณตามเดิม)
-      }));
-    }
-    return [];
-  }, [dailyMetrics, uniqueShopeeOrderCount]);
+    return (dailyMetrics || []).map(day => ({
+      date: day.date,
+      orderSP: Number(day.ordersSP ?? 0),
+      orderLZD: Number(day.ordersLZD ?? 0),
+      totalOrders: Number(day.ordersTotal ?? (Number(day.ordersSP ?? 0) + Number(day.ordersLZD ?? 0))),
+    }));
+  }, [dailyMetrics]);
 
   const handleStatToggle = (statKey: string) => {
-    setSelectedStats(prev => 
-      prev.includes(statKey) 
+    setSelectedStats(prev =>
+      prev.includes(statKey)
         ? prev.filter(s => s !== statKey)
         : [...prev, statKey]
     );
@@ -87,7 +92,7 @@ export default function OrderChart({
           📊 Order Chart
         </CardTitle>
         <p className="text-sm text-muted-foreground">
-          คลิกที่ StatCard เพื่อเพิ่ม/ลบจากกราฟ (แสดงความสัมพันธ์ระหว่างตัวแปร):
+          คลิกที่ StatCard เพื่อเพิ่ม/ลบจากกราฟ (แสดงความสัมพันธ์ระหว่างตัวแปร)
         </p>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -105,20 +110,19 @@ export default function OrderChart({
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div 
-                    className="w-4 h-4 rounded-full"
-                    style={{ backgroundColor: stat.color }}
-                  />
+                  <div className="w-4 h-4 rounded-full" style={{ backgroundColor: stat.color }} />
                   <span className="font-medium text-white">{stat.label}</span>
                 </div>
-                <Checkbox 
+                <Checkbox
                   checked={selectedStats.includes(stat.key)}
                   onChange={() => handleStatToggle(stat.key)}
                 />
               </div>
               <div className="mt-2">
                 <span className="text-2xl font-bold text-white">
-                  {chartData.reduce((sum, day) => sum + (day[stat.dataKey as keyof typeof day] as number), 0).toLocaleString()}
+                  {chartData
+                    .reduce((sum, day) => sum + (day[stat.dataKey as keyof typeof day] as number), 0)
+                    .toLocaleString()}
                 </span>
               </div>
             </div>
@@ -126,13 +130,13 @@ export default function OrderChart({
         </div>
 
         {/* Chart */}
-        {selectedStats.length > 0 && (
+        {selectedStats.length > 0 ? (
           <div className="h-80">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={chartData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                <XAxis 
-                  dataKey="date" 
+                <XAxis
+                  dataKey="date"
                   stroke="#9CA3AF"
                   fontSize={12}
                   tickFormatter={(value) => format(new Date(value), 'dd/MM')}
@@ -140,7 +144,7 @@ export default function OrderChart({
                 <YAxis stroke="#9CA3AF" fontSize={12} />
                 <Tooltip content={<CustomTooltip />} />
                 <Legend />
-                {ORDER_STAT_OPTIONS.map((stat) => 
+                {ORDER_STAT_OPTIONS.map((stat) =>
                   selectedStats.includes(stat.key) && (
                     <Line
                       key={stat.key}
@@ -156,9 +160,7 @@ export default function OrderChart({
               </LineChart>
             </ResponsiveContainer>
           </div>
-        )}
-
-        {selectedStats.length === 0 && (
+        ) : (
           <div className="h-80 flex items-center justify-center text-muted-foreground">
             <p>เลือกอย่างน้อย 1 ตัวแปรเพื่อแสดงกราฟ</p>
           </div>
