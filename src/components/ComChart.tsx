@@ -1,12 +1,21 @@
 import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer
+} from "recharts";
 import { format } from "date-fns";
 import { DollarSign } from "lucide-react";
-import { useImportedData } from "@/hooks/useImportedData";
 
 interface ComChartProps {
+  // ✅ ต้องส่ง dailyMetrics ที่มาจาก analyzeDailyBreakdownStable()
   dailyMetrics: DailyData[];
   calculatedMetrics?: any;
 }
@@ -17,6 +26,9 @@ interface DailyData {
   adSpend: number;
   profit: number;
   roi: number;
+  // ✅ ใช้คอมมิชชั่นรายวันแยกแพลตฟอร์มจาก utils
+  comSP?: number;
+  comLZD?: number;
 }
 
 interface StatOption {
@@ -32,37 +44,35 @@ const COM_STAT_OPTIONS: StatOption[] = [
   { key: 'totalCom', label: 'Total Com', color: '#10b981', dataKey: 'totalCom' },
 ];
 
-export default function ComChart({
-  dailyMetrics,
-  calculatedMetrics
-}: ComChartProps) {
+export default function ComChart({ dailyMetrics }: ComChartProps) {
   const [selectedStats, setSelectedStats] = useState<string[]>(['comSP', 'comLZD', 'totalCom']);
-  const { rawShopeeCommission, rawShopeeOrderCount, uniqueShopeeOrderCount } = useImportedData();
 
   const formatCurrency = (value: number) => {
     const rounded = Math.round(value * 100) / 100;
-    return rounded.toLocaleString('en-US', { 
-      minimumFractionDigits: 0, 
-      maximumFractionDigits: 0 
+    return rounded.toLocaleString('en-US', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0
     });
   };
 
+  // ✅ ไม่แบ่งสัดส่วนจากยอดรวมอีกต่อไป — ใช้ค่าจริงจาก utils
   const chartData = useMemo(() => {
-    if (dailyMetrics.length > 0) {
-      const totalCom = dailyMetrics.reduce((sum, day) => sum + day.totalCom, 0) || 1;
-      return dailyMetrics.map(day => ({
-        ...day,
-        comSP: rawShopeeCommission * (day.totalCom / totalCom),
-        comLZD: day.totalCom - rawShopeeCommission * (day.totalCom / totalCom),
-        orderSP: Math.round(uniqueShopeeOrderCount * (day.totalCom / totalCom)),
-      }));
-    }
-    return [];
-  }, [dailyMetrics, rawShopeeCommission, uniqueShopeeOrderCount]);
+    return (dailyMetrics || []).map(day => {
+      const comSP = Number(day.comSP ?? 0);
+      const comLZD = Number(day.comLZD ?? 0);
+      const totalCom = Number(day.totalCom ?? (comSP + comLZD));
+      return {
+        date: day.date,
+        comSP,
+        comLZD,
+        totalCom
+      };
+    });
+  }, [dailyMetrics]);
 
   const handleStatToggle = (statKey: string) => {
-    setSelectedStats(prev => 
-      prev.includes(statKey) 
+    setSelectedStats(prev =>
+      prev.includes(statKey)
         ? prev.filter(s => s !== statKey)
         : [...prev, statKey]
     );
@@ -92,7 +102,7 @@ export default function ComChart({
           💰 Com Chart
         </CardTitle>
         <p className="text-sm text-muted-foreground">
-          คลิกที่ StatCard เพื่อเพิ่ม/ลบจากกราฟ (แสดงความสัมพันธ์ระหว่างตัวแปร):
+          คลิกที่ StatCard เพื่อเพิ่ม/ลบจากกราฟ (แสดงความสัมพันธ์ระหว่างตัวแปร)
         </p>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -110,20 +120,19 @@ export default function ComChart({
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div 
-                    className="w-4 h-4 rounded-full"
-                    style={{ backgroundColor: stat.color }}
-                  />
+                  <div className="w-4 h-4 rounded-full" style={{ backgroundColor: stat.color }} />
                   <span className="font-medium text-white">{stat.label}</span>
                 </div>
-                <Checkbox 
+                <Checkbox
                   checked={selectedStats.includes(stat.key)}
                   onChange={() => handleStatToggle(stat.key)}
                 />
               </div>
               <div className="mt-2">
                 <span className="text-2xl font-bold text-white">
-                  {formatCurrency(chartData.reduce((sum, day) => sum + (day[stat.dataKey as keyof typeof day] as number), 0))}
+                  {formatCurrency(
+                    chartData.reduce((sum, day) => sum + (day[stat.dataKey as keyof typeof day] as number), 0)
+                  )}
                 </span>
               </div>
             </div>
@@ -131,13 +140,13 @@ export default function ComChart({
         </div>
 
         {/* Chart */}
-        {selectedStats.length > 0 && (
+        {selectedStats.length > 0 ? (
           <div className="h-80">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={chartData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                <XAxis 
-                  dataKey="date" 
+                <XAxis
+                  dataKey="date"
                   stroke="#9CA3AF"
                   fontSize={12}
                   tickFormatter={(value) => format(new Date(value), 'dd/MM')}
@@ -145,7 +154,7 @@ export default function ComChart({
                 <YAxis stroke="#9CA3AF" fontSize={12} />
                 <Tooltip content={<CustomTooltip />} />
                 <Legend />
-                {COM_STAT_OPTIONS.map((stat) => 
+                {COM_STAT_OPTIONS.map((stat) =>
                   selectedStats.includes(stat.key) && (
                     <Line
                       key={stat.key}
@@ -161,9 +170,7 @@ export default function ComChart({
               </LineChart>
             </ResponsiveContainer>
           </div>
-        )}
-
-        {selectedStats.length === 0 && (
+        ) : (
           <div className="h-80 flex items-center justify-center text-muted-foreground">
             <p>เลือกอย่างน้อย 1 ตัวแปรเพื่อแสดงกราฟ</p>
           </div>
