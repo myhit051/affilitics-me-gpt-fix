@@ -1,6 +1,13 @@
-
 import { useState, useMemo } from 'react';
-import { calculateMetrics, analyzeSubIdPerformance, analyzePlatformPerformance, analyzeDailyPerformance, CalculatedMetrics, DailyMetrics, sumShopeeCommissionRaw } from '@/utils/affiliateCalculations';
+import {
+  calculateMetrics,
+  analyzeSubIdPerformance,
+  analyzePlatformPerformance,
+  analyzeDailyBreakdownStable, // ✅ ใช้ตัวนี้แทน analyzeDailyPerformance
+  type CalculatedMetrics,
+  type DailyStableRow,        // ✅ ได้ field ordersSP/comSP พร้อมใช้กับกราฟ
+  sumShopeeCommissionRaw
+} from '@/utils/affiliateCalculations';
 import { dataMerger, DataSource } from '@/lib/data-merger';
 import { parse, isWithinInterval, startOfDay, endOfDay } from 'date-fns';
 import { DateRange } from 'react-day-picker';
@@ -93,7 +100,8 @@ export function useImportedData() {
     }
   });
   
-  const [dailyMetrics, setDailyMetrics] = useState<DailyMetrics[]>(() => {
+  // ✅ เปลี่ยน type เป็น DailyStableRow[] (มี ordersSP/comSP พร้อมใช้กราฟ)
+  const [dailyMetrics, setDailyMetrics] = useState<DailyStableRow[]>(() => {
     try {
       const stored = localStorage.getItem('affiliateDailyMetrics');
       return stored ? JSON.parse(stored) : [];
@@ -158,79 +166,43 @@ export function useImportedData() {
     }
   };
 
+  // ✅ ปรับการกรองวันที่:
+  //    - Shopee: ถ้ามีช่วงวันแล้ว "พาร์สไม่ได้" ให้ตัดทิ้ง (ไม่ include แบบเดิม)
+  //    - Lazada: ลอง Conversion Time -> Order Time
+  //    - Facebook: ใช้ Day
   const filterDataByDate = useMemo(() => (data: ImportedData, dateRange?: DateRange): ImportedData => {
     if (!dateRange?.from || !dateRange?.to) return data;
 
-    console.log('Filtering data by date range:', dateRange);
-    
-    // Extend date range to cover full days
     const startOfFromDate = startOfDay(dateRange.from);
     const endOfToDate = endOfDay(dateRange.to);
-    console.log('Extended date range:', { start: startOfFromDate, end: endOfToDate });
 
     const filteredShopeeOrders = data.shopeeOrders.filter(order => {
-      // Try multiple possible date columns for Shopee
       const possibleDateColumns = ['เวลาที่สั่งซื้อ', 'วันที่สั่งซื้อ', 'Order Time', 'Order Date', 'Date'];
-      let orderDate = null;
-      
+      let orderDate: Date | null = null;
       for (const column of possibleDateColumns) {
         if (order[column]) {
           orderDate = parseDate(order[column]);
           if (orderDate) break;
         }
       }
-      
       if (!orderDate) {
-        const dateValues = possibleDateColumns.map(col => `${col}: ${order[col]}`);
-        console.log('Invalid Shopee date - tried columns:', dateValues);
-        console.log('Sample invalid order:', Object.keys(order).slice(0, 10));
-        return true; // Include orders with invalid dates (assume they're in range)
+        // ❌ เดิม return true → รวม Unknown เข้ามาในช่วงวัน
+        return false; // ✅ ตัดทิ้งถ้าพาร์สไม่ได้ เมื่อมีการกำหนดช่วงวัน
       }
-      
-      const isInRange = isWithinInterval(orderDate, { 
-        start: startOfFromDate, 
-        end: endOfToDate 
-      });
-      
-      return isInRange;
+      return isWithinInterval(orderDate, { start: startOfFromDate, end: endOfToDate });
     });
 
     const filteredLazadaOrders = data.lazadaOrders.filter(order => {
-      // Use correct column: Conversion Time
-      const orderDate = parseDate(order['Conversion Time']);
-      if (!orderDate) {
-        console.log('Invalid Lazada date:', order['Conversion Time']);
-        return false; // Exclude invalid dates
-      }
-      
-      const isInRange = isWithinInterval(orderDate, { 
-        start: startOfFromDate, 
-        end: endOfToDate 
-      });
-      
-      return isInRange;
+      const raw = order['Conversion Time'] || order['Order Time'];
+      const orderDate = parseDate(raw);
+      if (!orderDate) return false;
+      return isWithinInterval(orderDate, { start: startOfFromDate, end: endOfToDate });
     });
 
     const filteredFacebookAds = data.facebookAds.filter(ad => {
-      // Use correct column: Day
       const adDate = parseDate(ad['Day']);
-      if (!adDate) {
-        console.log('Invalid Facebook date:', ad['Day']);
-        return false; // Exclude invalid dates
-      }
-      
-      const isInRange = isWithinInterval(adDate, { 
-        start: startOfFromDate, 
-        end: endOfToDate 
-      });
-      
-      return isInRange;
-    });
-
-    console.log('Filtered results:', {
-      shopee: filteredShopeeOrders.length,
-      lazada: filteredLazadaOrders.length,
-      facebook: filteredFacebookAds.length
+      if (!adDate) return false;
+      return isWithinInterval(adDate, { start: startOfFromDate, end: endOfToDate });
     });
 
     return {
@@ -249,60 +221,49 @@ export function useImportedData() {
     dateRange?: DateRange,
     selectedPlatform: string = "all"
   ) => {
-    console.log('processImportedData called with data:', data);
     setLoading(true);
     
     try {
-      // Add small delay to prevent UI blocking with large datasets
       setTimeout(() => {
         try {
-          // First, merge data from different sources if needed
+          // ----- (คง logic merge data เดิมไว้) -----
           let mergedData = data;
           let mergeResults: any = {};
 
-          // Check if we have data from multiple sources that need merging
           const hasFileData = data.shopeeOrders.some((order: any) => !order._dataSource) || 
-                             data.lazadaOrders.some((order: any) => !order._dataSource) ||
-                             data.facebookAds.some((ad: any) => !ad._dataSource);
+                              data.lazadaOrders.some((order: any) => !order._dataSource) ||
+                              data.facebookAds.some((ad: any) => !ad._dataSource);
 
           const hasApiData = data.shopeeOrders.some((order: any) => order._dataSource === 'facebook_api') ||
-                            data.lazadaOrders.some((order: any) => order._dataSource === 'facebook_api') ||
-                            data.facebookAds.some((ad: any) => ad._dataSource === 'facebook_api');
+                             data.lazadaOrders.some((order: any) => order._dataSource === 'facebook_api') ||
+                             data.facebookAds.some((ad: any) => ad._dataSource === 'facebook_api');
 
           if (hasFileData && hasApiData) {
-            console.log('Merging data from multiple sources...');
-            
-            // Separate file and API data
             const fileData = {
               shopeeOrders: data.shopeeOrders.filter((order: any) => !order._dataSource || order._dataSource === 'file_import'),
               lazadaOrders: data.lazadaOrders.filter((order: any) => !order._dataSource || order._dataSource === 'file_import'),
               facebookAds: data.facebookAds.filter((ad: any) => !ad._dataSource || ad._dataSource === 'file_import'),
-              campaigns: [] // Will be populated if campaign data exists
+              campaigns: []
             };
 
             const apiData = {
               shopeeOrders: data.shopeeOrders.filter((order: any) => order._dataSource === 'facebook_api'),
               lazadaOrders: data.lazadaOrders.filter((order: any) => order._dataSource === 'facebook_api'),
               facebookAds: data.facebookAds.filter((ad: any) => ad._dataSource === 'facebook_api'),
-              campaigns: [] // Will be populated if campaign data exists
+              campaigns: []
             };
 
-            // Use comprehensive merge functionality
             const comprehensiveMerge = dataMerger.mergeAllData(fileData, apiData);
-
             mergeResults = comprehensiveMerge.mergeResults;
 
-            // Detect cross-platform conflicts
             const conflictAnalysis = dataMerger.detectCrossPlatformConflicts(
               comprehensiveMerge.mergedData.shopeeOrders,
               comprehensiveMerge.mergedData.lazadaOrders,
               comprehensiveMerge.mergedData.facebookAds
             );
 
-            // Generate merge report
             const mergeReport = dataMerger.generateMergeReport(mergeResults);
 
-            // Strip data source tracking for backward compatibility with existing code
             mergedData = {
               ...data,
               shopeeOrders: dataMerger.stripDataSourceTracking(comprehensiveMerge.mergedData.shopeeOrders),
@@ -313,50 +274,30 @@ export function useImportedData() {
               conflictAnalysis,
               mergeReport
             };
-
-            console.log('Data merge completed:', {
-              overallStats: comprehensiveMerge.overallStatistics,
-              conflicts: conflictAnalysis.conflicts.length,
-              recommendations: conflictAnalysis.recommendations.length,
-              report: mergeReport.summary
-            });
           }
 
+          // ----- กรองช่วงวันก่อน -----
           const dateFilteredData = filterDataByDate(mergedData, dateRange);
-        
-          console.log('Processing imported data with filters:', {
-            shopee: dateFilteredData.shopeeOrders.length,
-            lazada: dateFilteredData.lazadaOrders.length,
-            facebook: dateFilteredData.facebookAds.length,
+
+          // ----- คำนวณ KPI ด้วย "ฟิลเตอร์จาก UI" (เดิมส่งว่าง) -----
+          const metrics = calculateMetrics(
+            dateFilteredData.shopeeOrders,
+            dateFilteredData.lazadaOrders,
+            dateFilteredData.facebookAds,
             selectedSubIds,
             selectedValidity,
             selectedChannels,
-            dateRange,
-            selectedPlatform
-          });
-
-          // Use the same filtered data for everything
-          const finalFilteredData = {
-            shopeeOrders: dateFilteredData.shopeeOrders,
-            lazadaOrders: dateFilteredData.lazadaOrders,
-            facebookAds: dateFilteredData.facebookAds
-          };
-
-          const metrics = calculateMetrics(
-            finalFilteredData.shopeeOrders,
-            finalFilteredData.lazadaOrders,
-            finalFilteredData.facebookAds,
-            [], // Don't filter further - data is already filtered by date
-            "all", // Don't filter further
-            [], // Don't filter further
-            "all" // Don't filter further
+            selectedPlatform,
+            {
+              shopeeOrderIdKey: 'รหัสการสั่งซื้อ'
+            }
           );
 
-          // Use the SAME filtered data for EVERYTHING
+          // ใช้ชุดที่ผ่านฟิลเตอร์จาก metrics ต่อให้ทุกส่วน เพื่อให้ตัวเลขตรงกันทั้งเว็บ
           const finalData = {
-            shopeeOrders: metrics.filteredShopeeOrders || finalFilteredData.shopeeOrders,
-            lazadaOrders: metrics.filteredLazadaOrders || finalFilteredData.lazadaOrders,
-            facebookAds: metrics.filteredFacebookAds || finalFilteredData.facebookAds,
+            shopeeOrders: metrics.filteredShopeeOrders || dateFilteredData.shopeeOrders,
+            lazadaOrders: metrics.filteredLazadaOrders || dateFilteredData.lazadaOrders,
+            facebookAds: metrics.filteredFacebookAds || dateFilteredData.facebookAds,
             totalRows: (metrics.filteredShopeeOrders?.length || 0) + (metrics.filteredLazadaOrders?.length || 0) + (metrics.filteredFacebookAds?.length || 0),
             errors: [],
             mergeResults,
@@ -368,19 +309,14 @@ export function useImportedData() {
           };
 
           setImportedData(finalData);
-          
-          // Also store raw data for components that need unfiltered data
-          if (!rawData) {
-            setRawData(data);
-          }
+          if (!rawData) setRawData(data);
           setCalculatedMetrics(metrics);
 
-          // Use the SAME filtered data for all analysis
+          // ----- วิเคราะห์ SubId / Platform ด้วยข้อมูลเดียวกัน -----
           const subIds = analyzeSubIdPerformance(
             finalData.shopeeOrders,
             finalData.lazadaOrders,
-            finalData.facebookAds,
-            metrics.totalAdsSpent
+            finalData.facebookAds
           );
           setSubIdAnalysis(subIds);
 
@@ -391,22 +327,19 @@ export function useImportedData() {
           );
           setPlatformAnalysis(platforms);
 
-          const daily = analyzeDailyPerformance(
-            finalFilteredData.shopeeOrders,
-            finalFilteredData.lazadaOrders,
-            finalFilteredData.facebookAds
+          // ----- กราฟรายวัน: ใช้ analyzeDailyBreakdownStable + ตัด Unknown -----
+          const daily = analyzeDailyBreakdownStable(
+            finalData.shopeeOrders,
+            finalData.lazadaOrders,
+            finalData.facebookAds,
+            {
+              shopeeOrderIdKey: 'รหัสการสั่งซื้อ',
+              includeUnknownBucket: false
+            }
           );
-          console.log('🔍 DAILY METRICS DEBUG:');
-          console.log('Filtered data counts:', {
-            shopee: finalFilteredData.shopeeOrders.length,
-            lazada: finalFilteredData.lazadaOrders.length,
-            facebook: finalFilteredData.facebookAds.length
-          });
-          console.log('Daily metrics result:', daily);
-          console.log('Daily metrics length:', daily.length);
           setDailyMetrics(daily);
-          
-          // Save to localStorage for persistence
+
+          // ----- persistence -----
           try {
             localStorage.setItem('affiliateData', JSON.stringify(finalData));
             localStorage.setItem('affiliateRawData', JSON.stringify(data));
@@ -414,40 +347,16 @@ export function useImportedData() {
             localStorage.setItem('affiliateSubIdAnalysis', JSON.stringify(subIds));
             localStorage.setItem('affiliatePlatformAnalysis', JSON.stringify(platforms));
             localStorage.setItem('affiliateDailyMetrics', JSON.stringify(daily));
-            console.log('✅ Data saved to localStorage');
           } catch (error) {
             console.warn('Failed to save data to localStorage:', error);
           }
 
-          // Debug logging
-          console.log('=== DATA CONSISTENCY CHECK ===');
-          console.log('calculatedMetrics.totalCom:', metrics.totalCom);
-          console.log('calculatedMetrics.totalComSP:', metrics.totalComSP);
-          console.log('calculatedMetrics.totalOrdersSP:', metrics.totalOrdersSP);
-          console.log('calculatedMetrics.cpoSP:', metrics.cpoSP);
-          console.log('dailyMetrics total:', daily.reduce((sum, day) => sum + day.totalCom, 0));
-          console.log('dailyMetrics sample:', daily.slice(0, 3));
-          console.log('finalData counts:', {
-            shopee: finalData.shopeeOrders.length,
-            lazada: finalData.lazadaOrders.length,
-            facebook: finalData.facebookAds.length
-          });
-          console.log('finalFilteredData counts:', {
-            shopee: finalFilteredData.shopeeOrders.length,
-            lazada: finalFilteredData.lazadaOrders.length,
-            facebook: finalFilteredData.facebookAds.length
-          });
-          console.log('Date range:', dateRange);
-
-          console.log('Data processing completed successfully');
-          console.log('Calculated metrics:', metrics);
-          
         } catch (error) {
           console.error('Error processing imported data:', error);
         } finally {
           setLoading(false);
         }
-      }, 100); // Small delay to prevent UI blocking
+      }, 100);
     } catch (error) {
       console.error('Error in processImportedData:', error);
       setLoading(false);
@@ -455,10 +364,8 @@ export function useImportedData() {
   };
 
   const resetToOriginalData = (originalData: ImportedData) => {
-    // Reset to original data without any filters
     setImportedData(originalData);
     
-    // Recalculate metrics with no filters applied
     const metrics = calculateMetrics(
       originalData.shopeeOrders,
       originalData.lazadaOrders,
@@ -466,15 +373,15 @@ export function useImportedData() {
       [], // No SubID filter
       "all", // No validity filter
       [], // No channel filter
-      "all" // No platform filter
+      "all", // No platform filter
+      { shopeeOrderIdKey: 'รหัสการสั่งซื้อ' }
     );
     setCalculatedMetrics(metrics);
 
     const subIds = analyzeSubIdPerformance(
       originalData.shopeeOrders,
       originalData.lazadaOrders,
-      originalData.facebookAds,
-      metrics.totalAdsSpent
+      originalData.facebookAds
     );
     setSubIdAnalysis(subIds);
 
@@ -484,6 +391,15 @@ export function useImportedData() {
       metrics.totalAdsSpent
     );
     setPlatformAnalysis(platforms);
+
+    // กราฟรายวัน (unfiltered)
+    const daily = analyzeDailyBreakdownStable(
+      originalData.shopeeOrders,
+      originalData.lazadaOrders,
+      originalData.facebookAds,
+      { shopeeOrderIdKey: 'รหัสการสั่งซื้อ', includeUnknownBucket: false }
+    );
+    setDailyMetrics(daily);
   };
 
   const hasData = importedData !== null && (
@@ -505,15 +421,6 @@ export function useImportedData() {
     const unique = new Set(importedData.shopeeOrders.map(order => order['เลขที่คำสั่งซื้อ']));
     return unique.size;
   }, [importedData]);
-
-  console.log('useImportedData state:', {
-    hasImportedData: importedData !== null,
-    hasData,
-    shopeeCount: importedData?.shopeeOrders?.length || 0,
-    lazadaCount: importedData?.lazadaOrders?.length || 0,
-    facebookCount: importedData?.facebookAds?.length || 0,
-    hasCalculatedMetrics: calculatedMetrics !== null
-  });
 
   return {
     importedData,
