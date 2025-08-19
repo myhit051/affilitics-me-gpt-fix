@@ -1,8 +1,16 @@
-
 import { useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
-import { format, parse, isValid } from "date-fns";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer
+} from "recharts";
+import { format, isValid } from "date-fns";
 import { DateRange } from "react-day-picker";
 
 interface AffiliatePerformanceChartProps {
@@ -16,19 +24,64 @@ interface AffiliatePerformanceChartProps {
   selectedPlatform?: string;
 }
 
-export default function AffiliatePerformanceChart({ 
+/* ---------------- helpers for robust fallback ---------------- */
+const parseDateKeyLoose = (s?: string): string => {
+  const str = (s || "").trim();
+  if (!str) return "Unknown";
+  let m = str.match(/^(\d{4})[-/](\d{2})[-/](\d{2})/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  m = str.match(/^(\d{2})[-/](\d{2})[-/](\d{4})/);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  const d = new Date(str);
+  if (!isValid(d)) return "Unknown";
+  const y = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${mm}-${dd}`;
+};
+
+const isCanceledShopeeFallback = (o: any): boolean => {
+  const raw = (o['สถานะการสั่งซื้อ'] ?? o['สถานะ'] ?? '').toString().trim().toLowerCase();
+  return new Set(['ยกเลิก', 'ถูกยกเลิก', 'cancel', 'canceled', 'cancelled']).has(raw);
+};
+
+const getShopeeOrderIdSafe = (o: any): string => {
+  return (o['รหัสการสั่งซื้อ'] ?? o['เลขที่คำสั่งซื้อ'] ?? '').toString();
+};
+
+const parseNumber = (v: any): number => {
+  if (v === undefined || v === null) return 0;
+  const n = parseFloat(String(v).replace(/[^0-9.-]/g, ''));
+  return isNaN(n) ? 0 : n;
+};
+
+// net → orderTotal → itemTotal
+const pickCommissionFromAgg = (agg: {
+  itemTotalSum: number;
+  orderTotalCandidates: number[];
+  netCandidates: number[];
+}): number => {
+  const bestNet = Math.max(0, ...agg.netCandidates);
+  if (bestNet > 0) return bestNet;
+  const bestOrder = Math.max(0, ...agg.orderTotalCandidates);
+  if (bestOrder > 0) return bestOrder;
+  return agg.itemTotalSum;
+};
+/* ------------------------------------------------------------- */
+
+export default function AffiliatePerformanceChart({
   dailyMetrics = [],
-  shopeeOrders = [], 
-  lazadaOrders = [], 
-  facebookAds = [], 
+  shopeeOrders = [],
+  lazadaOrders = [],
+  facebookAds = [],
   dateRange,
   selectedSubIds = [],
   selectedChannels = [],
   selectedPlatform = "all"
 }: AffiliatePerformanceChartProps) {
-  
+
   const chartData = useMemo(() => {
-    // If dailyMetrics is provided, use it directly (already filtered)
+    // ✅ ถ้าส่ง dailyMetrics (จาก analyzeDailyBreakdownStable) มาแล้ว ให้ใช้เลย
     if (dailyMetrics && dailyMetrics.length > 0) {
       return dailyMetrics.map(day => ({
         date: day.date,
@@ -39,42 +92,69 @@ export default function AffiliatePerformanceChart({
         displayDate: format(new Date(day.date), 'MM/dd')
       }));
     }
-    
-    // Fallback to original logic for backward compatibility
-    // Apply filters to data first
-    let filteredShopeeOrders = shopeeOrders;
-    let filteredLazadaOrders = lazadaOrders;
-    let filteredFacebookAds = facebookAds;
 
-    // Filter by Sub IDs
+    // -------------------- Fallback (ให้ผลตรงสูตร Shopee) --------------------
+    let filteredShopee = (shopeeOrders || []).filter(o => !isCanceledShopeeFallback(o));
+    let filteredLazada = (lazadaOrders || []);
+    let filteredAds = (facebookAds || []);
+
+    // Filter by Sub IDs (ลองหลายชื่อคอลัมน์ที่เจอทั่วไป)
     if (selectedSubIds.length > 0) {
-      filteredShopeeOrders = filteredShopeeOrders.filter(order => 
-        selectedSubIds.includes(order['Sub ID'] || order['SubID'] || '')
+      const toSet = new Set(selectedSubIds.filter(Boolean));
+      const match = (v?: string) => v && toSet.has(v);
+      filteredShopee = filteredShopee.filter(o =>
+        [o['Sub_id1'], o['Sub_id2'], o['Sub_id3'], o['Sub_id4'], o['Sub_id5'], o['Sub ID']]
+          .some(match as any)
       );
-      filteredLazadaOrders = filteredLazadaOrders.filter(order => 
-        selectedSubIds.includes(order['Sub ID'] || order['SubID'] || '')
+      filteredLazada = filteredLazada.filter(o =>
+        [o['Aff Sub ID'], o['Sub ID 1'], o['Sub ID 2'], o['Sub ID 3'], o['Sub ID 4'], o['Sub ID']]
+          .some(match as any)
       );
-      filteredFacebookAds = filteredFacebookAds.filter(ad => 
-        selectedSubIds.includes(ad['Sub ID'] || ad['SubID'] || '')
-      );
+      filteredAds = filteredAds.filter(ad => match(ad['Sub ID'] || ad['SubID']));
     }
 
-    // Filter by Channels
+    // Filter by Channels (Shopee เท่านั้น)
     if (selectedChannels.length > 0) {
-      filteredShopeeOrders = filteredShopeeOrders.filter(order => 
-        selectedChannels.includes(order['ช่องทาง'] || order['Channel'] || '')
-      );
+      const set = new Set(selectedChannels.filter(Boolean));
+      filteredShopee = filteredShopee.filter(o => set.has(o['ช่องทาง'] || o['Channel'] || ''));
     }
 
     // Filter by Platform
     if (selectedPlatform !== "all") {
-      if (selectedPlatform === "shopee") {
-        filteredLazadaOrders = [];
-      } else if (selectedPlatform === "lazada") {
-        filteredShopeeOrders = [];
+      if (selectedPlatform.toLowerCase() === "shopee") {
+        filteredLazada = [];
+      } else if (selectedPlatform.toLowerCase() === "lazada") {
+        filteredShopee = [];
       }
     }
 
+    // สร้างช่วงวันที่
+    let startDate: Date, endDate: Date;
+    if (dateRange?.from && dateRange?.to) {
+      startDate = new Date(dateRange.from);
+      endDate = new Date(dateRange.to);
+    } else {
+      const allDates: string[] = [];
+      filteredAds.forEach(ad => {
+        const k = parseDateKeyLoose(ad['Day'] || ad['Date']);
+        if (k !== 'Unknown') allDates.push(k);
+      });
+      filteredShopee.forEach(o => {
+        const k = parseDateKeyLoose(o['เวลาที่สั่งซื้อ'] || o['วันที่สั่งซื้อ']);
+        if (k !== 'Unknown') allDates.push(k);
+      });
+      filteredLazada.forEach(o => {
+        const k = parseDateKeyLoose(o['Conversion Time'] || o['Order Time']);
+        if (k !== 'Unknown') allDates.push(k);
+      });
+      if (allDates.length === 0) return [];
+      const min = allDates.reduce((a, b) => (a < b ? a : b));
+      const max = allDates.reduce((a, b) => (a > b ? a : b));
+      startDate = new Date(min);
+      endDate = new Date(max);
+    }
+
+    // เตรียม dataMap
     const dataMap = new Map<string, {
       date: string;
       adSpend: number;
@@ -82,164 +162,76 @@ export default function AffiliatePerformanceChart({
       totalProfit: number;
       overallROI: number;
     }>();
-
-    // If no date range is selected, collect all unique dates from the filtered data
-    let startDate: Date, endDate: Date;
-    
-    if (dateRange?.from && dateRange?.to) {
-      startDate = new Date(dateRange.from);
-      endDate = new Date(dateRange.to);
-    } else {
-      // Find the earliest and latest dates from all data sources
-      const allDates: Date[] = [];
-      
-      // Collect dates from filtered Facebook Ads
-      filteredFacebookAds.forEach(ad => {
-        const dateStr = ad['Day'] || ad['Date'];
-        if (dateStr) {
-          const parsedDate = new Date(dateStr);
-          if (isValid(parsedDate)) {
-            allDates.push(parsedDate);
-          }
-        }
-      });
-      
-      // Collect dates from filtered Shopee orders
-      filteredShopeeOrders.forEach(order => {
-        const dateStr = order['เวลาที่สั่งซื้อ'];
-        if (dateStr) {
-          const parsedDate = new Date(dateStr);
-          if (isValid(parsedDate)) {
-            allDates.push(parsedDate);
-          }
-        }
-      });
-      
-      // Collect dates from filtered Lazada orders
-      filteredLazadaOrders.forEach(order => {
-        const dateStr = order['Conversion Time'] || order['Order Time'];
-        if (dateStr) {
-          const parsedDate = new Date(dateStr);
-          if (isValid(parsedDate)) {
-            allDates.push(parsedDate);
-          }
-        }
-      });
-      
-      if (allDates.length === 0) return [];
-      
-      startDate = new Date(Math.min(...allDates.map(d => d.getTime())));
-      endDate = new Date(Math.max(...allDates.map(d => d.getTime())));
+    const cur = new Date(startDate);
+    while (cur <= endDate) {
+      const y = cur.getFullYear();
+      const m = String(cur.getMonth() + 1).padStart(2, '0');
+      const d = String(cur.getDate()).padStart(2, '0');
+      const key = `${y}-${m}-${d}`;
+      dataMap.set(key, { date: key, adSpend: 0, totalCom: 0, totalProfit: 0, overallROI: 0 });
+      cur.setDate(cur.getDate() + 1);
     }
 
-    // Initialize date range
-    const currentDate = new Date(startDate);
-    while (currentDate <= endDate) {
-      const dateStr = format(currentDate, 'yyyy-MM-dd');
-      dataMap.set(dateStr, {
-        date: dateStr,
-        adSpend: 0,
-        totalCom: 0,
-        totalProfit: 0,
-        overallROI: 0
-      });
-      currentDate.setDate(currentDate.getDate() + 1);
-    }
-
-    // Process filtered Facebook Ads data using "Day" column
-    filteredFacebookAds.forEach(ad => {
-      const dateStr = ad['Day'] || ad['Date']; // Try Day first, then Date as fallback
-      if (dateStr) {
-        const parsedDate = new Date(dateStr);
-        if (isValid(parsedDate)) {
-          const formattedDate = format(parsedDate, 'yyyy-MM-dd');
-          const data = dataMap.get(formattedDate);
-          if (data) {
-            data.adSpend += parseFloat(ad['Amount spent (THB)']) || 0;
-          }
-        }
+    // Ads → adSpend
+    filteredAds.forEach(ad => {
+      const key = parseDateKeyLoose(ad['Day'] || ad['Date']);
+      if (key !== 'Unknown') {
+        const row = dataMap.get(key);
+        if (row) row.adSpend += parseNumber(ad['Amount spent (THB)']);
       }
     });
 
-    // Process unique Shopee orders using "เวลาที่สั่งซื้อ" column
-    const uniqueShopeeOrders = new Map();
-    filteredShopeeOrders.forEach(order => {
-      const orderId = order['เลขที่คำสั่งซื้อ'];
-      if (!uniqueShopeeOrders.has(orderId)) {
-        uniqueShopeeOrders.set(orderId, order);
-      }
+    // Shopee → รวม “ต่อออเดอร์”
+    const shpAgg = new Map<string, { dateKey: string; itemTotalSum: number; orderTotalCandidates: number[]; netCandidates: number[] }>();
+    filteredShopee.forEach(o => {
+      const id = getShopeeOrderIdSafe(o);
+      if (!id) return;
+      const agg =
+        shpAgg.get(id) ||
+        { dateKey: parseDateKeyLoose(o['เวลาที่สั่งซื้อ'] || o['วันที่สั่งซื้อ']), itemTotalSum: 0, orderTotalCandidates: [], netCandidates: [] };
+      agg.itemTotalSum += parseNumber(o['คอมมิชชั่นสินค้าโดยรวม(฿)']);
+      const ot = parseNumber(o['คอมมิชชั่นคำสั่งซื้อโดยรวม(฿)']);
+      const nt = parseNumber(o['ค่าคอมมิชชั่นสุทธิ(฿)']);
+      if (ot > 0) agg.orderTotalCandidates.push(ot);
+      if (nt > 0) agg.netCandidates.push(nt);
+      shpAgg.set(id, agg);
+    });
+    shpAgg.forEach(agg => {
+      const key = agg.dateKey || "Unknown";
+      if (key === "Unknown") return;
+      const row = dataMap.get(key);
+      if (row) row.totalCom += pickCommissionFromAgg(agg);
     });
 
-    Array.from(uniqueShopeeOrders.values()).forEach(order => {
-      const dateStr = order['เวลาที่สั่งซื้อ'];
-      if (dateStr) {
-        try {
-          const parsedDate = new Date(dateStr);
-          
-          if (isValid(parsedDate)) {
-            const formattedDate = format(parsedDate, 'yyyy-MM-dd');
-            const data = dataMap.get(formattedDate);
-            if (data) {
-              data.totalCom += parseFloat(order['คอมมิชชั่นสินค้าโดยรวม(฿)']) || 0;
-            }
-          }
-        } catch (error) {
-          console.warn('Error parsing Shopee date:', dateStr);
-        }
-      }
+    // Lazada → unique by Check Out ID
+    const lzdUnique = new Map<string, any>();
+    filteredLazada.forEach(o => {
+      const id = o['Check Out ID'];
+      if (id && !lzdUnique.has(id)) lzdUnique.set(id, o);
+    });
+    Array.from(lzdUnique.values()).forEach(o => {
+      const key = parseDateKeyLoose(o['Conversion Time'] || o['Order Time']);
+      if (key === "Unknown") return;
+      const row = dataMap.get(key);
+      if (row) row.totalCom += parseNumber(o['Commission'] ?? o['Payout']);
     });
 
-    // Process unique Lazada orders using "Conversion Time" column (or Order Time as fallback)
-    const uniqueLazadaOrders = new Map();
-    filteredLazadaOrders.forEach(order => {
-      const checkoutId = order['Check Out ID'];
-      if (!uniqueLazadaOrders.has(checkoutId)) {
-        uniqueLazadaOrders.set(checkoutId, order);
-      }
-    });
-
-    Array.from(uniqueLazadaOrders.values()).forEach(order => {
-      const dateStr = order['Conversion Time'] || order['Order Time'];
-      if (dateStr) {
-        try {
-          const parsedDate = new Date(dateStr);
-          if (isValid(parsedDate)) {
-            const formattedDate = format(parsedDate, 'yyyy-MM-dd');
-            const data = dataMap.get(formattedDate);
-            if (data) {
-              data.totalCom += parseFloat(order['Commission'] || order['Payout']) || 0;
-            }
-          }
-        } catch (error) {
-          console.warn('Error parsing Lazada date:', dateStr);
-        }
-      }
-    });
-
-    // Calculate profit and ROI for each day
-    const result = Array.from(dataMap.values()).map(data => {
-      data.totalProfit = data.totalCom - data.adSpend;
-      data.overallROI = data.adSpend > 0 ? (data.totalProfit / data.adSpend) * 100 : 0;
-      return {
-        ...data,
-        displayDate: format(new Date(data.date), 'MM/dd')
-      };
+    // สรุปผล
+    const result = Array.from(dataMap.values()).map(r => {
+      r.totalProfit = r.totalCom - r.adSpend;
+      r.overallROI = r.adSpend > 0 ? (r.totalProfit / r.adSpend) * 100 : 0;
+      return { ...r, displayDate: format(new Date(r.date), 'MM/dd') };
     });
 
     return result.sort((a, b) => a.date.localeCompare(b.date));
-  }, [dailyMetrics, shopeeOrders, lazadaOrders, facebookAds, dateRange]);
+  }, [dailyMetrics, shopeeOrders, lazadaOrders, facebookAds, dateRange, selectedSubIds, selectedChannels, selectedPlatform]);
 
   const formatCurrency = (value: number) => {
-    // Round to 2 decimal places and format with commas
     const rounded = Math.round(value * 100) / 100;
-    return rounded.toLocaleString('en-US', { 
-      minimumFractionDigits: 0, 
-      maximumFractionDigits: 2 
+    return rounded.toLocaleString('en-US', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2
     });
-  };
-
-  const formatPercentage = (value: number) => {
-    return `${value.toFixed(1)}%`;
   };
 
   return (
@@ -254,30 +246,28 @@ export default function AffiliatePerformanceChart({
           <ResponsiveContainer width="100%" height={400}>
             <LineChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
-              <XAxis 
-                dataKey="displayDate" 
+              <XAxis
+                dataKey="displayDate"
                 className="text-xs"
                 tick={{ fontSize: 12 }}
               />
-              <YAxis 
+              <YAxis
                 yAxisId="currency"
                 orientation="left"
                 className="text-xs"
                 tick={{ fontSize: 12 }}
                 tickFormatter={(value) => formatCurrency(value)}
               />
-              <YAxis 
+              <YAxis
                 yAxisId="percentage"
                 orientation="right"
                 className="text-xs"
                 tick={{ fontSize: 12 }}
-                tickFormatter={(value) => `${value.toFixed(1)}%`}
+                tickFormatter={(value) => `${(value as number).toFixed(1)}%`}
               />
-              <Tooltip 
+              <Tooltip
                 formatter={(value: number, name: string) => {
-                  if (name === 'Overall ROI') {
-                    return [`${value.toFixed(1)}%`, name];
-                  }
+                  if (name === 'Overall ROI') return [`${value.toFixed(1)}%`, name];
                   return [formatCurrency(value), name];
                 }}
                 labelFormatter={(label) => `วันที่: ${label}`}
@@ -288,42 +278,10 @@ export default function AffiliatePerformanceChart({
                 }}
               />
               <Legend />
-              <Line 
-                yAxisId="currency"
-                type="monotone" 
-                dataKey="adSpend" 
-                stroke="#ef4444" 
-                strokeWidth={2}
-                name="Ad Spend"
-                dot={{ fill: '#ef4444' }}
-              />
-              <Line 
-                yAxisId="currency"
-                type="monotone" 
-                dataKey="totalCom" 
-                stroke="#10b981" 
-                strokeWidth={2}
-                name="Total Com"
-                dot={{ fill: '#10b981' }}
-              />
-              <Line 
-                yAxisId="currency"
-                type="monotone" 
-                dataKey="totalProfit" 
-                stroke="#3b82f6" 
-                strokeWidth={2}
-                name="Total Profit"
-                dot={{ fill: '#3b82f6' }}
-              />
-              <Line 
-                yAxisId="percentage"
-                type="monotone" 
-                dataKey="overallROI" 
-                stroke="#8b5cf6" 
-                strokeWidth={2}
-                name="Overall ROI"
-                dot={{ fill: '#8b5cf6' }}
-              />
+              <Line yAxisId="currency" type="monotone" dataKey="adSpend" stroke="#ef4444" strokeWidth={2} name="Ad Spend" dot={{ fill: '#ef4444' }} />
+              <Line yAxisId="currency" type="monotone" dataKey="totalCom" stroke="#10b981" strokeWidth={2} name="Total Com" dot={{ fill: '#10b981' }} />
+              <Line yAxisId="currency" type="monotone" dataKey="totalProfit" stroke="#3b82f6" strokeWidth={2} name="Total Profit" dot={{ fill: '#3b82f6' }} />
+              <Line yAxisId="percentage" type="monotone" dataKey="overallROI" stroke="#8b5cf6" strokeWidth={2} name="Overall ROI" dot={{ fill: '#8b5cf6' }} />
             </LineChart>
           </ResponsiveContainer>
         ) : (
