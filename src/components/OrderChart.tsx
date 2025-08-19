@@ -11,22 +11,21 @@ import {
   Legend,
   ResponsiveContainer
 } from "recharts";
-import { format } from "date-fns";
 import { ShoppingCart } from "lucide-react";
 
 interface OrderChartProps {
-  // ✅ ต้องส่ง dailyMetrics ที่มาจาก analyzeDailyBreakdownStable()
+  // ต้องส่ง dailyMetrics ที่มาจาก analyzeDailyBreakdownStable()
   dailyMetrics: DailyData[];
   calculatedMetrics?: any;
 }
 
 interface DailyData {
-  date: string;
+  date: string;          // 'YYYY-MM-DD'
   totalCom: number;
   adSpend: number;
   profit: number;
   roi: number;
-  // ✅ ใช้ข้อมูลคำสั่งซื้อจาก utils โดยตรง
+  // ใช้ข้อมูลคำสั่งซื้อจาก utils ตรง ๆ
   ordersSP?: number;
   ordersLZD?: number;
   ordersTotal?: number;
@@ -40,20 +39,28 @@ interface StatOption {
 }
 
 const ORDER_STAT_OPTIONS: StatOption[] = [
-  { key: 'orderSP', label: 'Order SP', color: '#f97316', dataKey: 'orderSP' },
-  { key: 'orderLZD', label: 'Order LZD', color: '#a855f7', dataKey: 'orderLZD' },
-  { key: 'totalOrders', label: 'Total Orders', color: '#10b981', dataKey: 'totalOrders' },
+  { key: 'orderSP',    label: 'Order SP',    color: '#f97316', dataKey: 'orderSP' },
+  { key: 'orderLZD',   label: 'Order LZD',   color: '#a855f7', dataKey: 'orderLZD' },
+  { key: 'totalOrders',label: 'Total Orders',color: '#10b981', dataKey: 'totalOrders' },
 ];
+
+// ---------- helpers: no-timezone formatting ----------
+const ymdToLabel = (ymd: string, withYear = false) => {
+  const m = ymd.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return ymd || '';
+  return withYear ? `${m[3]}/${m[2]}/${m[1]}` : `${m[3]}/${m[2]}`;
+};
+// -----------------------------------------------------
 
 export default function OrderChart({ dailyMetrics }: OrderChartProps) {
   const [selectedStats, setSelectedStats] = useState<string[]>(['orderSP', 'orderLZD', 'totalOrders']);
 
   const formatNumber = (value: number) => Math.round(value).toLocaleString('en-US');
 
-  // ✅ ไม่เดา/ถัวเฉลี่ยจากยอดคอมมิชชั่นอีกต่อไป — ใช้ค่าจริงจาก utils
+  // ใช้ค่าจริงจาก utils ไม่เดา/ถัวเฉลี่ย
   const chartData = useMemo(() => {
     return (dailyMetrics || []).map(day => ({
-      date: day.date,
+      date: day.date, // 'YYYY-MM-DD'
       orderSP: Number(day.ordersSP ?? 0),
       orderLZD: Number(day.ordersLZD ?? 0),
       totalOrders: Number(day.ordersTotal ?? (Number(day.ordersSP ?? 0) + Number(day.ordersLZD ?? 0))),
@@ -62,9 +69,7 @@ export default function OrderChart({ dailyMetrics }: OrderChartProps) {
 
   const handleStatToggle = (statKey: string) => {
     setSelectedStats(prev =>
-      prev.includes(statKey)
-        ? prev.filter(s => s !== statKey)
-        : [...prev, statKey]
+      prev.includes(statKey) ? prev.filter(s => s !== statKey) : [...prev, statKey]
     );
   };
 
@@ -72,7 +77,7 @@ export default function OrderChart({ dailyMetrics }: OrderChartProps) {
     if (active && payload && payload.length) {
       return (
         <div className="bg-card border border-border rounded-lg p-3 shadow-lg">
-          <p className="font-medium text-white mb-2">{format(new Date(label), 'dd/MM/yyyy')}</p>
+          <p className="font-medium text-white mb-2">{ymdToLabel(label, true)}</p>
           {payload.map((entry: any, index: number) => (
             <p key={index} className="text-sm" style={{ color: entry.color }}>
               {entry.name}: {formatNumber(entry.value)}
@@ -139,7 +144,7 @@ export default function OrderChart({ dailyMetrics }: OrderChartProps) {
                   dataKey="date"
                   stroke="#9CA3AF"
                   fontSize={12}
-                  tickFormatter={(value) => format(new Date(value), 'dd/MM')}
+                  tickFormatter={(value: string) => ymdToLabel(value)}
                 />
                 <YAxis stroke="#9CA3AF" fontSize={12} />
                 <Tooltip content={<CustomTooltip />} />
